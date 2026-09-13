@@ -3042,6 +3042,72 @@ def test_output_target_reconciles_toward_the_setting_when_conf_diverges(tmp_path
     )
 
 
+def test_output_target_keeps_retrying_when_resolution_comes_back_empty(tmp_path, monkeypatch, caplog):
+    """Issue #246 reproduction: the user points the Output channel at a
+    device that has just appeared in the graph (a TV switched on over
+    HDMI) but hasn't settled yet — _resolve_external_output() comes back
+    empty on the first attempt. That must NOT be recorded as "reconciled":
+    doing so would compare equal against the setting forever after and
+    the daemon would never try resolving again, leaving the channel silently
+    stuck with no target even once the device is fully up.
+    """
+    import logging
+    import arctis_sound_manager.sonar_to_pipewire as _s2p_mod
+
+    conf_dir = tmp_path / "filter-chain.conf.d"
+    conf_dir.mkdir(parents=True)
+    settings_dir = tmp_path / ".config" / "arctis_manager" / "settings"
+    settings_dir.mkdir(parents=True)
+
+    tv = "alsa_output.pci-0000_09_00.1.hdmi-stereo"
+    (settings_dir / "general_settings.yaml").write_text(
+        f"external_output_device: {tv}\n"
+    )
+    # No conf and no snapshot yet — the device was just picked for the
+    # first time, right as it appeared in the graph.
+
+    monkeypatch.setattr(_s2p_mod, "_CONF_DIR", conf_dir)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    resolve_calls = []
+
+    def _still_settling(*a, **kw):
+        resolve_calls.append(1)
+        return "", 2, "FL FR"
+
+    monkeypatch.setattr(_s2p_mod, "_resolve_external_output", _still_settling)
+
+    with caplog.at_level(logging.WARNING):
+        first = _s2p_mod._get_configured_external_output()
+    assert first == ""
+    assert len(resolve_calls) == 1
+
+    # A second read, moments later, must still see a mismatch and retry —
+    # not silently agree the empty target was ever "the" reconciled state.
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        second = _s2p_mod._get_configured_external_output()
+    assert any("diverged" in r.message for r in caplog.records), (
+        "an empty resolution must not be locked in as reconciled — the next "
+        "read has to retry, not take the cheap snapshot-matches path"
+    )
+    assert len(resolve_calls) == 2
+
+    # Once the device has settled, resolution succeeds and the channel
+    # self-heals without any user or maintenance action.
+    monkeypatch.setattr(_s2p_mod, "_resolve_external_output",
+                        lambda *a, **kw: (tv, 2, "FL FR"))
+    resolved = _s2p_mod._get_configured_external_output()
+    assert resolved == tv
+
+    # And now that resolution finally succeeded, the fast path takes over.
+    calls_after = []
+    monkeypatch.setattr(_s2p_mod, "_resolve_external_output",
+                        lambda *a, **kw: calls_after.append(1) or (tv, 2, "FL FR"))
+    assert _s2p_mod._get_configured_external_output() == tv
+    assert calls_after == [], "once genuinely reconciled, must go back to the cheap path"
+
+
 def test_output_target_stays_on_fast_path_when_setting_unchanged(tmp_path, monkeypatch):
     """The common case — nothing changed — must never pay for a pulsectl
     round-trip: _resolve_external_output() must not be called at all."""

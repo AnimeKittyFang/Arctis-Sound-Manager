@@ -1468,8 +1468,15 @@ def generate_sonar_eq_conf(
         # CHA-6: record which raw external_output_device setting produced
         # this target, so a later read can tell — cheaply, without a
         # pulsectl round-trip — whether the setting has since moved on
-        # without this conf being rewritten to match.
-        _sync_output_setting_snapshot()
+        # without this conf being rewritten to match. Only once resolution
+        # actually found a sink (issue #246): a device that is still
+        # settling in the graph right after a hotplug (a TV just switched
+        # on) makes _resolve_external_output() come back empty, and syncing
+        # the snapshot anyway would lock that failure in as "reconciled"
+        # forever — the next read only compares the setting against this
+        # snapshot and would never notice anything needs retrying.
+        if target:
+            _sync_output_setting_snapshot()
     else:
         # game / media: always 8ch, always (nominally) targets HeSuVi.
         target = target_override or _CHANNEL_TARGET.get(channel, "")
@@ -2512,7 +2519,11 @@ def _regenerate_eq_conf(
             "to flat",
             conf_path.name, reason,
         )
-        if channel == "output":
+        # See the matching guard in generate_sonar_eq_conf() (issue #246):
+        # an empty target means resolution failed this attempt, not that the
+        # channel has genuinely no external sink configured — only sync on
+        # success, so a mismatch keeps being retried until it actually is.
+        if channel == "output" and target:
             _sync_output_setting_snapshot()
 
 
