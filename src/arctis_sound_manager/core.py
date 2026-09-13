@@ -157,6 +157,23 @@ _RESUME_STATUS_PROBE_TIMEOUT_S = 3.0
 _RESUME_RESET_STATE_PATH = Path.home() / '.config' / 'arctis_manager' / 'usb_resume_reset_state.json'
 
 
+def init_entry_pause_seconds(entry) -> float | None:
+    """The pause a `device_init` entry asks for, or None if it is a frame.
+
+    `['sleep', <milliseconds>]` is not sent to the device: the init sequence
+    waits that long before the next entry. The Nova Pro Omni needs it after
+    its two mode switches (0x8d sonar-present, 0x49 software ChatMix): the DAC
+    accepts the transfer but abandons the switch if another command lands
+    within a few milliseconds, which is what left the ChatMix knob inert after
+    every boot until the daemon was restarted by hand. Verified on hardware —
+    the identical frames spaced by a second engage the mixer every time.
+    """
+    if (isinstance(entry, (list, tuple)) and len(entry) == 2
+            and entry[0] == 'sleep' and isinstance(entry[1], int) and not isinstance(entry[1], bool)):
+        return entry[1] / 1000
+    return None
+
+
 #: Auto mic-switch trigger, stored as an int in the ``micro_autoswitch`` setting.
 _MIC_AUTOSWITCH_MODES = {0: 'off', 1: 'connection', 2: 'mute', 3: 'both'}
 
@@ -2613,25 +2630,40 @@ class CoreEngine:
         total = len(self.device_config.device_init)
 
         for index, bytes in enumerate(self.device_config.device_init, start=1):
-            # One retry on USBError — most failures here are transient
+            pause = init_entry_pause_seconds(bytes)
+            if pause is not None:
+                # A settle time the profile author asked for, not a frame.
+                time.sleep(pause)
+                continue
+
+            # One retry on a failed write — most failures here are transient
             # (kernel driver re-attached itself between detach and write,
             # device still warming up after enumeration). Persistent
             # failures continue with the remaining commands so partial
             # state at least powers something rather than nothing.
+            #
+            # send_command() reports a USB error by returning False after
+            # logging it; it does not raise. The retry used to be written as
+            # an `except USBError` around that call, which could never fire,
+            # so every failed init frame was silently sent exactly once.
             for attempt in (1, 2):
+                failure: str | None = None
                 try:
-                    self.send_command(self.translate_init_bytes(bytes), endpoint)
-                    break
+                    if self.send_command(self.translate_init_bytes(bytes), endpoint) is False:
+                        failure = "USB write failed"
                 except usb.core.USBError as e:
-                    if attempt == 1:
-                        self.logger.warning(
-                            f"{context} cmd {index}/{total} failed ({e!r}); retrying once."
-                        )
-                        continue
-                    self.logger.error(
-                        f"{context} cmd {index}/{total} still failing after retry: {e!r}. "
-                        "Device may be left in a partially-configured state."
+                    failure = repr(e)
+                if failure is None:
+                    break
+                if attempt == 1:
+                    self.logger.warning(
+                        f"{context} cmd {index}/{total} failed ({failure}); retrying once."
                     )
+                    continue
+                self.logger.error(
+                    f"{context} cmd {index}/{total} still failing after retry: {failure}. "
+                    "Device may be left in a partially-configured state."
+                )
         self._last_settings_push = time.monotonic()
 
     def _schedule_settings_replay(self) -> None:
@@ -3461,7 +3493,9 @@ class CoreEngine:
                 raise Exception(f"Invalid update sequence value: {b}")
         return result
 
-    def send_command(self, command: list[int], endpoint: int) -> None:
+    def send_command(self, command: list[int], endpoint: int) -> bool:
+        """Write one command frame. Returns False when the USB write failed
+        (the error is logged here, not raised), True otherwise."""
         if self.device_config is None:
             raise Exception('Device configuration is not available')
     
@@ -3522,6 +3556,8 @@ class CoreEngine:
             else:
                 self._usb_busy_count = 0
                 self.logger.warning(f"Error sending command: {e}")
+            return False
+        return True
 
     def _find_hid_device(self, vendor_id: int, product_ids: list[int]) -> 'TypedDevice | None':
         """Find the first USB device matching vendor_id/product_ids that exposes an HID interface."""
