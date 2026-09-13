@@ -39,6 +39,11 @@ device:
   # in device_init below are on top of this, not instead of it — this is
   # the general mechanism behind the specific bug #245 found and fixed.
   time_between_commands_ms: 50
+  # GG's own wait after the transmitter enumerates before sending it any
+  # command at all (init-sleep-length) — the firmware itself is still
+  # booting for this long. Applied before device_init even starts, deferred
+  # off the pyudev thread by configure_virtual_sinks() (see core.py).
+  init_sleep_length_ms: 5000
   vendor_id: 0x1038
   product_ids:
     - 0x2290 # SteelSeries Arctis Nova Pro Omni (DAC switch in USB-1 position)

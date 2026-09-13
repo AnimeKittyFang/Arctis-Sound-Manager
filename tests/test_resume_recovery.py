@@ -56,6 +56,9 @@ def _make_engine(device_config):
     engine._resume_reset_attempted = False
     engine._last_usb_reset_monotonic = 0.0
     engine._release_usb_handle = MagicMock()
+    engine._device_configured_event = threading.Event()
+    engine._device_configured_event.set()
+    engine._pending_init_timer = None
     engine.configure_virtual_sinks = MagicMock()
     engine.request_device_status = MagicMock()
     engine._await_raw_response = AsyncMock(return_value=[0xb0, 0, 0])

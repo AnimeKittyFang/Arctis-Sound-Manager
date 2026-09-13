@@ -2,6 +2,9 @@ device:
   name: SteelSeries Arctis 9 Wireless
   # GG's own minimum spacing between commands for this firmware family.
   time_between_commands_ms: 20
+  # GG's own wait after the transmitter enumerates before sending it any
+  # command at all (init-sleep-length).
+  init_sleep_length_ms: 200
   vendor_id: 0x1038
   product_ids:
     - 0x12c2 # Arctis 9

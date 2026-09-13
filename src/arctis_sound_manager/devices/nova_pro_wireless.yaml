@@ -6,6 +6,10 @@ device:
   # PR #245 flagged this family as untested but likely affected by the
   # same abandoned-mode-switch bug; this generic pacing covers it.
   time_between_commands_ms: 50
+  # GG's own wait after the transmitter enumerates before sending it any
+  # command at all (init-sleep-length) — the firmware itself is still
+  # booting for this long.
+  init_sleep_length_ms: 5000
   vendor_id: 0x1038
   product_ids:
     - 0x12e0 # SteelSeries Arctis Nova Pro Wireless

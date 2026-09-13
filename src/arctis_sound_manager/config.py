@@ -290,6 +290,13 @@ class DeviceConfiguration:
     # (#238/#245), but the underlying firmware limitation applies to every
     # command GG sends on the family, not just those two.
     time_between_commands_ms: int | None
+    # How long, in milliseconds, to wait after claiming the USB interface
+    # before sending the first device_init command. SteelSeries' own GG
+    # engine waits this long after a connection event before talking to the
+    # device (its `init-sleep-length`) because the firmware itself needs
+    # time to finish booting — up to 5s for the Nova Pro Omni/Elite/Wireless
+    # family. None ⇒ no wait (legacy behaviour).
+    init_sleep_length_ms: int | None
 
     def __init__(self, raw_configuration: dict[str, Any]):
         raw_config: dict[str, Any] | None = raw_configuration.get('device', None)
@@ -308,6 +315,7 @@ class DeviceConfiguration:
         self.generic = bool(raw_config.get('generic', False))
         self.reset_on_resume = bool(raw_config.get('reset_on_resume', False))
         self.time_between_commands_ms = raw_config.get('time_between_commands_ms', None)
+        self.init_sleep_length_ms = raw_config.get('init_sleep_length_ms', None)
         self.command_interface_index = raw_config.get('command_interface_index', (-1, -1))
         # The HID usage page the vendor interface declares, from SteelSeries'
         # own (sync-interface <page> …). Their specifications address an

@@ -152,6 +152,13 @@ _SETTINGS_REPLAY_MIN_INTERVAL_S = 5.0
 _USB_RESET_MIN_INTERVAL_S = 60.0
 _USB_RESET_SETTLE_S = 2.0
 _RESUME_STATUS_PROBE_TIMEOUT_S = 3.0
+# Worst case observed across profiles: init_sleep_length_ms tops out at 5s
+# (Nova Pro Omni/Elite/Wireless family) plus a few more seconds for
+# device_init itself once time_between_commands_ms pacing is applied to
+# every frame. Generous on purpose — this only gates how long the resume
+# status probe waits before giving up on configure_virtual_sinks() ever
+# finishing, not a normal-path duration.
+_RESUME_CONFIGURE_WAIT_TIMEOUT_S = 12.0
 
 # Breadcrumb file for bug reports — see CoreEngine._record_usb_reset_attempt.
 _RESUME_RESET_STATE_PATH = Path.home() / '.config' / 'arctis_manager' / 'usb_resume_reset_state.json'
@@ -364,6 +371,20 @@ class CoreEngine:
         # the monotonic timestamp additionally rate-limits across cycles.
         self._resume_reset_attempted: bool = False
         self._last_usb_reset_monotonic: float = 0.0
+
+        # configure_virtual_sinks() runs on the pyudev observer thread, which
+        # must not block (it is the single path for every USB hotplug event,
+        # not just this device's) — so a profile's init_sleep_length_ms is
+        # served by a background timer rather than a plain time.sleep(). This
+        # event is cleared when detection starts and set once the deferred
+        # (or immediate, when no settle is needed) work finishes, so anything
+        # that needs to wait for a real configuration — resume_from_sleep()'s
+        # status probe, in particular — has something to wait on instead of
+        # assuming configure_virtual_sinks() already did the work by the time
+        # it returns.
+        self._device_configured_event = threading.Event()
+        self._device_configured_event.set()  # nothing pending yet
+        self._pending_init_timer: threading.Timer | None = None
 
         self.reload_device_configurations()
         self.usb_devices_monitor.register_on_connect(self.on_device_connected)
@@ -2250,7 +2271,10 @@ class CoreEngine:
         return True
 
     def configure_virtual_sinks(self) -> None:
-        with self._detect_lock:
+        self._detect_lock.acquire()
+        self._device_configured_event.clear()
+        deferred = False
+        try:
             usb_device: Device | Any | None = None
             device_config: DeviceConfiguration | None = None
             used_preferred_device = False
@@ -2474,52 +2498,101 @@ class CoreEngine:
             self.setup_loopbacks()
             self._claim_default_source()
 
-            # Configure the device. Never fatal: init_device() retries USB
-            # errors per command and carries on, but anything else it raises —
-            # a profile whose device_init references a setting that is not
-            # there, a readback that throws, a hardware-EQ reconcile failing —
-            # used to escape here, before _device_ready is set at the end of
-            # this method. The daemon then had a working audio path and a
-            # responsive headset while every GUI surface said "No device
-            # detected", because the status sentinel is gated on _device_ready
-            # (#202: GameBuds X, whose profile documents its protocol as
-            # assumed rather than captured). A partly configured headset is
-            # still a present headset, and saying otherwise sends the user
-            # hunting for a connection problem they do not have.
-            try:
-                self.init_device()
-            except Exception as exc:
-                self.logger.error(
-                    "init_device failed for %s: %r — continuing with a "
-                    "partially configured device rather than reporting it "
-                    "absent. Some controls may not have been applied.",
-                    device_config.name, exc,
+            # SteelSeries' own GG engine waits this long after the USB
+            # transmitter (base station/dongle) enumerates before sending it
+            # any command at all — its `init-sleep-length`, up to 5s for the
+            # Nova Pro Omni/Elite/Wireless family, because the firmware is
+            # still booting. configure_virtual_sinks() runs on the pyudev
+            # observer thread (register_on_connect), which must not block —
+            # it is the single path for every USB hotplug event, not just
+            # this device's — so the wait is served by a timer instead of a
+            # plain time.sleep() here. _finish_configure_virtual_sinks() owns
+            # releasing _detect_lock and setting _device_configured_event
+            # once it runs; this method must not touch either on this path.
+            init_sleep = (device_config.init_sleep_length_ms or 0) / 1000
+            if init_sleep:
+                self.logger.info(
+                    "configure_virtual_sinks: waiting %.1fs for the transmitter "
+                    "to finish booting before init_device (init_sleep_length_ms)",
+                    init_sleep,
                 )
+                timer = threading.Timer(
+                    init_sleep, self._finish_configure_virtual_sinks, args=(device_config,))
+                timer.daemon = True
+                self._pending_init_timer = timer
+                deferred = True
+                timer.start()
+                return
 
-            if self.oled_manager is not None:
-                self.oled_manager.stop()
-                self.oled_manager = None
-            has_oled = (
-                device_config.status is not None
-                and 'gamedac' in device_config.status.representation
-                and device_config.oled is not None
+            self._finish_configure_virtual_sinks_body(device_config)
+        finally:
+            if not deferred:
+                self._device_configured_event.set()
+                self._detect_lock.release()
+
+    def _finish_configure_virtual_sinks(self, device_config: DeviceConfiguration) -> None:
+        """Timer callback for the init_sleep_length_ms deferral above.
+
+        The synchronous half of configure_virtual_sinks() handed off
+        _detect_lock without releasing it — owning that release (and marking
+        _device_configured_event) is this callback's job now.
+        """
+        try:
+            self._finish_configure_virtual_sinks_body(device_config)
+        finally:
+            self._device_configured_event.set()
+            self._detect_lock.release()
+
+    def _finish_configure_virtual_sinks_body(self, device_config: DeviceConfiguration) -> None:
+        """Everything configure_virtual_sinks() does once it is safe to talk
+        to the device: send device_init, bring up the OLED, mark it ready.
+
+        Never fatal: init_device() retries USB errors per command and
+        carries on, but anything else it raises — a profile whose
+        device_init references a setting that is not there, a readback that
+        throws, a hardware-EQ reconcile failing — used to escape here,
+        before _device_ready is set at the end of this method. The daemon
+        then had a working audio path and a responsive headset while every
+        GUI surface said "No device detected", because the status sentinel
+        is gated on _device_ready (#202: GameBuds X, whose profile documents
+        its protocol as assumed rather than captured). A partly configured
+        headset is still a present headset, and saying otherwise sends the
+        user hunting for a connection problem they do not have.
+        """
+        try:
+            self.init_device()
+        except Exception as exc:
+            self.logger.error(
+                "init_device failed for %s: %r — continuing with a "
+                "partially configured device rather than reporting it "
+                "absent. Some controls may not have been applied.",
+                device_config.name, exc,
             )
-            if has_oled:
-                # The OLED is decoration: never let it take the daemon down with
-                # it.  A missing font, an unexpected Pillow version (#154) or a
-                # refused USB interface used to abort startup entirely, leaving
-                # the user with no audio routing at all.
-                try:
-                    self.oled_manager = OledManager(self)
-                    self.oled_manager.start()
-                except Exception as exc:
-                    self.logger.error("OLED display disabled, initialisation failed: %r", exc)
-                    self.oled_manager = None
 
-            self.redirect_to_media_sink()
-            # Reached only when the full pipeline was configured without an early
-            # return; mark the device as ready so loop() stops re-scanning.
-            self._device_ready = True
+        if self.oled_manager is not None:
+            self.oled_manager.stop()
+            self.oled_manager = None
+        has_oled = (
+            device_config.status is not None
+            and 'gamedac' in device_config.status.representation
+            and device_config.oled is not None
+        )
+        if has_oled:
+            # The OLED is decoration: never let it take the daemon down with
+            # it.  A missing font, an unexpected Pillow version (#154) or a
+            # refused USB interface used to abort startup entirely, leaving
+            # the user with no audio routing at all.
+            try:
+                self.oled_manager = OledManager(self)
+                self.oled_manager.start()
+            except Exception as exc:
+                self.logger.error("OLED display disabled, initialisation failed: %r", exc)
+                self.oled_manager = None
+
+        self.redirect_to_media_sink()
+        # Reached only when the full pipeline was configured without an early
+        # return; mark the device as ready so loop() stops re-scanning.
+        self._device_ready = True
 
     def _discover_physical_nodes(
         self,
@@ -4300,6 +4373,16 @@ class CoreEngine:
         timer = self._settings_replay_timer
         if timer is not None:
             timer.cancel()
+        # A pending init_sleep_length_ms timer (a resume immediately followed
+        # by another suspend) would otherwise fire init_device() on a handle
+        # this method is about to release — and leak _detect_lock, since
+        # cancel() here races the timer already having started running. Not
+        # fully closable without a lock around the cancel/release pair, but
+        # _finish_configure_virtual_sinks_body()'s broad except turns that
+        # race into a logged error rather than a crash either way.
+        pending = self._pending_init_timer
+        if pending is not None:
+            pending.cancel()
         self._resume_reset_attempted = False
         self.logger.info("prepare_for_sleep: releasing USB handle before system suspend")
         self._release_usb_handle()
@@ -4319,6 +4402,14 @@ class CoreEngine:
             "resume_from_sleep: re-acquiring device (was: init_device on the "
             "old handle, #238)")
         self.configure_virtual_sinks()
+
+        # configure_virtual_sinks() can return before it is actually done: a
+        # profile with init_sleep_length_ms (#238/#245 family) defers the
+        # rest of the work to a timer instead of blocking the pyudev thread.
+        # Probing before that timer fires would race init_device() and read
+        # a device that hasn't been told anything yet.
+        await asyncio.get_running_loop().run_in_executor(
+            None, self._device_configured_event.wait, _RESUME_CONFIGURE_WAIT_TIMEOUT_S)
 
         if self.usb_device is None or self.device_config is None:
             return
