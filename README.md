@@ -1167,6 +1167,7 @@ Thanks to everyone who has contributed code, fixes, or community support:
 | [DefactoCasual](https://github.com/DefactoCasual) | Diagnosed the USB-permissions boot-time race on Nobara down to its root cause, alongside jsuvanto (discussion [#140](https://github.com/loteran/Arctis-Sound-Manager/discussions/140)) |
 | [n6dlh](https://github.com/n6dlh) | Traced the exact missing PySide6 Qt submodules that stopped ASM from starting on Ubuntu 26.04 ([#163](https://github.com/loteran/Arctis-Sound-Manager/issues/163)) |
 | [relxek](https://github.com/relxek) | Fixed per-channel output devices not sticking ([#177](https://github.com/loteran/Arctis-Sound-Manager/pull/177)); diagnosed a `pw-dump` JSON-doubling bug causing periodic audio dropouts ([#164](https://github.com/loteran/Arctis-Sound-Manager/pull/164)); fixed silent audio loss from a headset's ALSA card profile being changed by a system sound-settings UI ([#234](https://github.com/loteran/Arctis-Sound-Manager/pull/234)) |
+| [kevinpbaker](https://github.com/kevinpbaker) | Traced the Arctis Nova Pro Omni's dead ChatMix knob to a firmware race — the base station abandons its Game/Chat mode switch if the next command lands within a few milliseconds — and fixed it with a settle pause in `device_init` ([#245](https://github.com/loteran/Arctis-Sound-Manager/pull/245)) |
 
 ---
 
