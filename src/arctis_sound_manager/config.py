@@ -280,6 +280,16 @@ class DeviceConfiguration:
     # instead of relying on the generic post-resume status probe. Only the
     # Nova Pro Omni declares this — see resume_from_sleep() in core.py.
     reset_on_resume: bool
+    # Minimum delay, in milliseconds, _send_device_init_sequence() waits
+    # after each frame it sends during device_init/settings replay. None ⇒
+    # no pacing (legacy behaviour). SteelSeries' own GG engine enforces this
+    # per firmware family (its `time-between-commands`, pushed to the device
+    # over a HIDCONFIG report at connect time) because a command arriving too
+    # soon after the previous one is silently dropped on some families — the
+    # Nova Pro Omni's Sonar/ChatMix mode switch is one instance of this
+    # (#238/#245), but the underlying firmware limitation applies to every
+    # command GG sends on the family, not just those two.
+    time_between_commands_ms: int | None
 
     def __init__(self, raw_configuration: dict[str, Any]):
         raw_config: dict[str, Any] | None = raw_configuration.get('device', None)
@@ -297,6 +307,7 @@ class DeviceConfiguration:
         # See the validation block below and _setup_generic_device (#189).
         self.generic = bool(raw_config.get('generic', False))
         self.reset_on_resume = bool(raw_config.get('reset_on_resume', False))
+        self.time_between_commands_ms = raw_config.get('time_between_commands_ms', None)
         self.command_interface_index = raw_config.get('command_interface_index', (-1, -1))
         # The HID usage page the vendor interface declares, from SteelSeries'
         # own (sync-interface <page> …). Their specifications address an

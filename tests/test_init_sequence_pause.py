@@ -56,6 +56,7 @@ def test_pause_entry_recognised(entry, expected):
 def test_init_sequence_pauses_and_does_not_send_the_pause():
     cfg = MagicMock()
     cfg.device_init = [[0x01, 0x8d, 0x01], ["sleep", 1000], [0x01, 0x49, 0x01]]
+    cfg.time_between_commands_ms = None
     engine = _engine(cfg)
     order: list = []
     engine.send_command.side_effect = lambda cmd, ep: order.append(("send", list(cmd)))
@@ -69,6 +70,7 @@ def test_init_sequence_pauses_and_does_not_send_the_pause():
 def test_failed_write_is_retried_once():
     cfg = MagicMock()
     cfg.device_init = [[0x01, 0x8d, 0x01]]
+    cfg.time_between_commands_ms = None
     engine = _engine(cfg)
     engine.send_command.side_effect = [False, True]
 
@@ -82,6 +84,7 @@ def test_failed_write_is_retried_once():
 def test_persistent_failure_is_reported_and_sequence_continues():
     cfg = MagicMock()
     cfg.device_init = [[0x01, 0x8d, 0x01], [0x01, 0x49, 0x01]]
+    cfg.time_between_commands_ms = None
     engine = _engine(cfg)
     engine.send_command.side_effect = [False, False, True]
 

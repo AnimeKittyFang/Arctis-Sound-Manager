@@ -1,5 +1,7 @@
 device:
   name: SteelSeries Arctis Nova 7P (Gen 2)
+  # GG's own minimum spacing between commands for this firmware family.
+  time_between_commands_ms: 30
   vendor_id: 0x1038
   product_ids:
     - 0x22a7 # Arctis Nova 7P V2 (firmware after Jan. 2026 update — percentage battery 0-100)

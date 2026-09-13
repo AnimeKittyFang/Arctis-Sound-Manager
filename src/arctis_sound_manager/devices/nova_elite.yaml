@@ -3,6 +3,9 @@
 
 device:
   name: SteelSeries Arctis Nova Elite
+  # GG's own minimum spacing between commands for this firmware family
+  # (same base station firmware family as the Nova Pro Omni, #238/#245).
+  time_between_commands_ms: 50
   vendor_id: 0x1038
   product_ids:
     - 0x2244 # SteelSeries Arctis Nova Elite GameHub (vendor HID)

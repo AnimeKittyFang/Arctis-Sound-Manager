@@ -1,5 +1,8 @@
 device:
   name: SteelSeries Arctis 1/7X/7P Wireless
+  # GG's own minimum spacing between commands for this firmware family
+  # (standard-boilerplate default — this family declares no override).
+  time_between_commands_ms: 10
   vendor_id: 0x1038
   product_ids:
     - 0x12b3 # Arctis 1 Wireless

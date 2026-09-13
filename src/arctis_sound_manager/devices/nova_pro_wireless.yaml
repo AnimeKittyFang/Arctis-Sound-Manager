@@ -1,5 +1,11 @@
 device:
   name: SteelSeries Arctis Nova Pro Wireless
+  # GG's own minimum spacing between commands for this firmware family.
+  # This profile's device_init sends the same Sonar/ChatMix mode-switch
+  # pair (0x8d, 0x49) as the Nova Pro Omni without an explicit settle —
+  # PR #245 flagged this family as untested but likely affected by the
+  # same abandoned-mode-switch bug; this generic pacing covers it.
+  time_between_commands_ms: 50
   vendor_id: 0x1038
   product_ids:
     - 0x12e0 # SteelSeries Arctis Nova Pro Wireless

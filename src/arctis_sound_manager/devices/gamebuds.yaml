@@ -1,5 +1,7 @@
 device:
   name: SteelSeries Arctis GameBuds
+  # GG's own minimum spacing between commands for this firmware family.
+  time_between_commands_ms: 50
   vendor_id: 0x1038
   product_ids:
     - 0x230a  # Arctis GameBuds (PS5/PC) via dongle 2.4 GHz — confirmé par capture USB

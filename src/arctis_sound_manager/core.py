@@ -2628,6 +2628,14 @@ class CoreEngine:
             return
         endpoint = self.get_command_endpoint_address()
         total = len(self.device_config.device_init)
+        # SteelSeries' own GG engine paces every command it sends to a device
+        # by at least this much (its `time-between-commands`, pushed to the
+        # firmware over a HIDCONFIG report at connect time) — a command
+        # landing sooner than that after the previous one is silently
+        # dropped on some families. #238/#245 found one instance of this on
+        # the Nova Pro Omni (the Sonar/ChatMix mode switch); this is the
+        # general mechanism behind it, not specific to those two opcodes.
+        pace = (self.device_config.time_between_commands_ms or 0) / 1000
 
         for index, bytes in enumerate(self.device_config.device_init, start=1):
             pause = init_entry_pause_seconds(bytes)
@@ -2664,6 +2672,8 @@ class CoreEngine:
                     f"{context} cmd {index}/{total} still failing after retry: {failure}. "
                     "Device may be left in a partially-configured state."
                 )
+            if pace:
+                time.sleep(pace)
         self._last_settings_push = time.monotonic()
 
     def _schedule_settings_replay(self) -> None:
