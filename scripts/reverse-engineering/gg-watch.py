@@ -130,6 +130,7 @@ def save_state(version: str, edevice_files: list[str], spec_hashes: dict[str, st
 # ── acquisition ──────────────────────────────────────────────────────────────
 
 def fetch(version: str, url: str) -> Path:
+    GG_WORKDIR.mkdir(parents=True, exist_ok=True)
     dest = GG_WORKDIR / f"SteelSeriesGG{version}Setup.exe"
     if dest.is_file() and dest.stat().st_size > 100_000_000:
         log(f"  installer already downloaded: {dest.name}")
