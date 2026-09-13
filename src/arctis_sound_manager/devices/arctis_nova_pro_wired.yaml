@@ -48,6 +48,12 @@ device:
     - [0x06, 0x49, 0x01]                          # Enable ChatMix
     - [0x06, 0x20]
 
+  # GG's own (shutdown ...) block for this family. Only disable-chatmix:
+  # this profile never sends set_sonar_present (0x8d) in device_init in the
+  # first place, so there is nothing to undo there.
+  shutdown_commands:
+    - [0x06, 0x49, 0x00]                          # Disable ChatMix
+
   status:
     request: 0x06b0
     response_mapping:

@@ -160,6 +160,14 @@ _RESUME_STATUS_PROBE_TIMEOUT_S = 3.0
 # finishing, not a normal-path duration.
 _RESUME_CONFIGURE_WAIT_TIMEOUT_S = 12.0
 
+# GG's own pattern after a *radio* reconnect (the wireless headset coming
+# back into range / powering on — not the USB transmitter, which never
+# moved): retry a status read up to this many times, sleeping
+# device_config.radio_reconnect_probe_delay_ms between attempts, instead of
+# trusting a single flat settle time. Every family that does this uses the
+# same attempt budget; only the per-attempt delay differs.
+_RADIO_RECONNECT_PROBE_ATTEMPTS = 10
+
 # Breadcrumb file for bug reports — see CoreEngine._record_usb_reset_attempt.
 _RESUME_RESET_STATE_PATH = Path.home() / '.config' / 'arctis_manager' / 'usb_resume_reset_state.json'
 
@@ -385,6 +393,11 @@ class CoreEngine:
         self._device_configured_event = threading.Event()
         self._device_configured_event.set()  # nothing pending yet
         self._pending_init_timer: threading.Timer | None = None
+
+        # The main asyncio loop, captured in start() — lets a plain
+        # threading.Timer callback (replay_device_settings runs on one, not
+        # on the loop) run an async probe via run_coroutine_threadsafe.
+        self._main_event_loop: asyncio.AbstractEventLoop | None = None
 
         self.reload_device_configurations()
         self.usb_devices_monitor.register_on_connect(self.on_device_connected)
@@ -1691,6 +1704,7 @@ class CoreEngine:
 
     def start(self) -> Coroutine:
         self._stopping = False
+        self._main_event_loop = asyncio.get_running_loop()
         self.usb_devices_monitor.start()
 
         # Apply the configured quantum (#183) — including 0, which is what
@@ -2782,6 +2796,67 @@ class CoreEngine:
         self._settings_replay_timer = timer
         timer.start()
 
+    async def _probe_status_once(self, timeout: float) -> bool:
+        """One status request/reply round trip, true only if it succeeded.
+
+        Independent of _probe_device_awake() (resume_from_sleep's own probe,
+        #238): that one is tuned for a single post-suspend check with a
+        generous timeout, this one is meant to be called several times in a
+        tight retry loop with a short per-attempt timeout, so they are kept
+        separate rather than sharing one implementation with two different
+        timeout needs.
+        """
+        status = self.device_config.status if self.device_config else None
+        if status is None or status.request > 0xFF:
+            # Same limitation as _probe_device_awake(): the raw-response
+            # matcher can't key on a report-id-prefixed request value, so
+            # this family can't be probed at all — treat as answered rather
+            # than retrying uselessly for the full attempt budget.
+            return True
+        try:
+            self.request_device_status()
+        except usb.core.USBError:
+            return False
+        response = await self._await_raw_response(status.request, timeout=timeout)
+        return response is not None
+
+    def _wait_for_device_ready_after_radio_reconnect(self) -> None:
+        """Mirror GG's own retry-until-answered read after a *radio*
+        reconnect (get_fw_version retried up to 10x with a family-specific
+        delay in its own device spec) instead of trusting a single flat
+        settle time — see DeviceConfiguration.radio_reconnect_probe_delay_ms.
+
+        Runs on _schedule_settings_replay()'s threading.Timer thread, not
+        the pyudev observer thread configure_virtual_sinks() must not block
+        — sleeping here for a few seconds worst case is fine.
+        """
+        delay_ms = self.device_config.radio_reconnect_probe_delay_ms if self.device_config else None
+        if not delay_ms:
+            return
+        delay = delay_ms / 1000
+        loop = self._main_event_loop
+        if loop is None:
+            return
+        for attempt in range(1, _RADIO_RECONNECT_PROBE_ATTEMPTS + 1):
+            time.sleep(delay)
+            try:
+                future = asyncio.run_coroutine_threadsafe(self._probe_status_once(delay), loop)
+                answered = future.result(timeout=delay + 1.0)
+            except Exception as e:
+                self.logger.warning(
+                    "radio-reconnect probe attempt %d/%d failed: %r",
+                    attempt, _RADIO_RECONNECT_PROBE_ATTEMPTS, e)
+                answered = False
+            if answered:
+                self.logger.info(
+                    "radio-reconnect: device answered after %d/%d attempt(s)",
+                    attempt, _RADIO_RECONNECT_PROBE_ATTEMPTS)
+                return
+        self.logger.warning(
+            "radio-reconnect: device did not answer after %d attempts (%.1fs total) — "
+            "replaying settings anyway",
+            _RADIO_RECONNECT_PROBE_ATTEMPTS, _RADIO_RECONNECT_PROBE_ATTEMPTS * delay)
+
     def replay_device_settings(self) -> None:
         """Re-push what the headset forgot while it was switched off.
 
@@ -2792,6 +2867,7 @@ class CoreEngine:
         """
         if self.device_config is None or self.usb_device is None:
             return
+        self._wait_for_device_ready_after_radio_reconnect()
         self.logger.info("Headset came back on — replaying its settings")
         self._send_device_init_sequence(context="settings replay")
         self._replay_settings_missing_from_init()
@@ -4553,8 +4629,32 @@ class CoreEngine:
         finally:
             self.usb_device = None
 
+    def _send_shutdown_commands(self) -> None:
+        """Tell the device ASM is going away, before the interface is released.
+
+        SteelSeries' own GG engine sends disable-chatmix/disable-sonar here
+        for the "Sonar integrated device" family (its `(shutdown ...)` block)
+        so the base station falls back to plain hardware volume instead of
+        being left in software-ChatMix mode with nobody driving it — the
+        knob would otherwise keep emitting mix-balance events into the void
+        until ASM (or GG) restarts and re-enables it. Best-effort: a failed
+        write here must never block the rest of teardown().
+        """
+        if not (self.device_config and self.device_config.shutdown_commands and self.usb_device):
+            return
+        endpoint = self.get_command_endpoint_address()
+        for command in self.device_config.shutdown_commands:
+            try:
+                self.send_command(self.translate_init_bytes(command), endpoint)
+            except usb.core.USBError as e:
+                self.logger.warning(f"Shutdown command {command} failed: {e!r}")
+
     def teardown(self) -> None:
         if self.usb_device:
+            try:
+                self._send_shutdown_commands()
+            except Exception as e:
+                self.logger.warning(f"Error sending shutdown commands: {e}")
             try:
                 if self.device_config is not None:
                     # Release every interface kernel_detach claimed, not just
