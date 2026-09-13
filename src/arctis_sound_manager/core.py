@@ -32,6 +32,8 @@ from arctis_sound_manager.channel_volumes import load_channel_volumes
 from arctis_sound_manager.pactl import ONLY_PHYSICAL, PulseAudioManager
 from arctis_sound_manager.settings import DeviceSettings, GeneralSettings
 from arctis_sound_manager.usb_devices_monitor import USBDevicesMonitor
+from arctis_sound_manager.usb_reenumerate import (reset_via_usbfs,
+                                                  sysfs_device_dir)
 from arctis_sound_manager.utils import ObservableDict
 from arctis_sound_manager.oled_manager import OledManager
 
@@ -139,6 +141,20 @@ _DERIVED_TOKENS = {
 # flap protection, for a headset sitting at the edge of its range.
 _SETTINGS_REPLAY_SETTLE_S = 1.5
 _SETTINGS_REPLAY_MIN_INTERVAL_S = 5.0
+
+# Issue #238: on some families (Nova Pro Omni) the ChatMix event stream stays
+# dead after a system resume until the DAC is replugged, even though
+# configure_virtual_sinks() re-acquires the USB handle cleanly. A USB reset
+# (USBDEVFS_RESET) forces the port to re-enumerate — see resume_from_sleep().
+# Rate-limited independently of the settings replay above: a reset drops the
+# ALSA node for a couple of seconds, so it gets a wider minimum interval and
+# at most one attempt per suspend/resume cycle.
+_USB_RESET_MIN_INTERVAL_S = 60.0
+_USB_RESET_SETTLE_S = 2.0
+_RESUME_STATUS_PROBE_TIMEOUT_S = 3.0
+
+# Breadcrumb file for bug reports — see CoreEngine._record_usb_reset_attempt.
+_RESUME_RESET_STATE_PATH = Path.home() / '.config' / 'arctis_manager' / 'usb_resume_reset_state.json'
 
 
 #: Auto mic-switch trigger, stored as an int in the ``micro_autoswitch`` setting.
@@ -325,6 +341,12 @@ class CoreEngine:
         # _schedule_settings_replay().
         self._last_settings_push: float = 0.0
         self._settings_replay_timer: threading.Timer | None = None
+
+        # Guards for the resume-time USB reset escalation (#238). Reset by
+        # prepare_for_sleep() so at most one attempt happens per suspend cycle;
+        # the monotonic timestamp additionally rate-limits across cycles.
+        self._resume_reset_attempted: bool = False
+        self._last_usb_reset_monotonic: float = 0.0
 
         self.reload_device_configurations()
         self.usb_devices_monitor.register_on_connect(self.on_device_connected)
@@ -3216,12 +3238,12 @@ class CoreEngine:
             ports = getattr(self.usb_device, 'port_numbers', None)
         except Exception:  # noqa: BLE001
             return None
-        if not bus or not ports:
+        device_dir = sysfs_device_dir(bus, ports, sys_root)
+        if device_dir is None:
             return None
-        device_dir_name = f"{bus}-" + ".".join(str(p) for p in ports)
         try:
             iface_dir = find_interface_sysfs_dir(
-                sys_root, device_dir_name, interface_number)
+                sys_root, device_dir.name, interface_number)
             if iface_dir is None:
                 return None
             # The HID device sits one level under the interface, in a
@@ -4220,6 +4242,143 @@ class CoreEngine:
                         self.logger.warning(f"EQ mode reconcile failed: {e!r}")
         except asyncio.CancelledError:
             raise
+
+    def prepare_for_sleep(self) -> None:
+        """Called from PrepareForSleep(True), just before the system suspends.
+
+        Only releases the USB handle. teardown() also tears down the audio
+        graph (redirect_audio_on_disconnect() + loopback_manager.stop_all()),
+        which would rebuild the whole PipeWire routing on every suspend for no
+        reason — not what this is for (#238).
+        """
+        timer = self._settings_replay_timer
+        if timer is not None:
+            timer.cancel()
+        self._resume_reset_attempted = False
+        self.logger.info("prepare_for_sleep: releasing USB handle before system suspend")
+        self._release_usb_handle()
+
+    async def resume_from_sleep(self) -> None:
+        """Called from PrepareForSleep(False) — the system just woke up.
+
+        Replaces the previous bare init_device() (#238): that re-sent every
+        device_init command over the SAME libusb handle that just survived
+        suspend, which on the Nova Pro Omni left the ChatMix event stream dead
+        until a physical replug even though ordinary commands kept working.
+        configure_virtual_sinks() is the already-tested path that releases and
+        re-acquires a same-device re-enumeration (boot, wake, replug all go
+        through it) — use that instead of talking to the stale handle.
+        """
+        self.logger.info(
+            "resume_from_sleep: re-acquiring device (was: init_device on the "
+            "old handle, #238)")
+        self.configure_virtual_sinks()
+
+        if self.usb_device is None or self.device_config is None:
+            return
+
+        probe_ok = await self._probe_device_awake()
+        reset_on_resume = bool(self.device_config.reset_on_resume)
+        if not (reset_on_resume or not probe_ok):
+            return
+
+        if self._resume_reset_attempted:
+            return
+        now = time.monotonic()
+        since_last = now - self._last_usb_reset_monotonic
+        if since_last < _USB_RESET_MIN_INTERVAL_S:
+            self.logger.info(
+                "resume_from_sleep: skipping reset (last one %.0fs ago, minimum %.0fs)",
+                since_last, _USB_RESET_MIN_INTERVAL_S)
+            return
+
+        self._resume_reset_attempted = True
+        self._last_usb_reset_monotonic = now
+        await self._escalate_to_usb_reset(
+            reason="reset_on_resume" if reset_on_resume else "status probe timeout")
+
+    async def _probe_device_awake(self) -> bool:
+        """True once the device answers a status request after resume.
+
+        _await_raw_response() keys a pending reply on the single raw byte
+        response[0] (see _resolve_raw_response_waiters) — that only lines up
+        with device_config.status.request for families whose replies are not
+        prefixed by a HID report id. The Nova Pro Omni's status.request
+        (0x01b0) is such a report-id + opcode pair — every reply on that
+        family starts with the report id byte (0x01), never with the request
+        value itself — so a literal probe there would time out on every
+        resume regardless of whether the device is actually fine. Rather than
+        rig a probe that always "fails" and resets every headset in that
+        group on every wake, those profiles skip the generic probe entirely
+        and opt into the escalation explicitly via reset_on_resume instead.
+        """
+        status = self.device_config.status if self.device_config else None
+        if status is None or status.request > 0xFF:
+            return True
+
+        started = time.monotonic()
+        try:
+            self.request_device_status()
+        except usb.core.USBError as e:
+            self.logger.warning("resume_from_sleep: status request failed: %r", e)
+            return False
+
+        response = await self._await_raw_response(
+            status.request, timeout=_RESUME_STATUS_PROBE_TIMEOUT_S)
+        if response is not None:
+            self.logger.info(
+                "resume_from_sleep: status probe OK in %.2fs", time.monotonic() - started)
+            return True
+
+        self.logger.warning(
+            "resume_from_sleep: no status reply within %.1fs — device is not answering",
+            _RESUME_STATUS_PROBE_TIMEOUT_S)
+        return False
+
+    async def _escalate_to_usb_reset(self, reason: str) -> None:
+        if self.usb_device is None or self.device_config is None:
+            return
+        self.logger.info(
+            "usb_reenumerate: resetting %04x:%04x at %s (reason=%s)",
+            self.device_config.vendor_id,
+            self.usb_device.idProduct,
+            sysfs_device_dir(getattr(self.usb_device, 'bus', None),
+                             getattr(self.usb_device, 'port_numbers', None)),
+            reason,
+        )
+        success = reset_via_usbfs(self.usb_device, self.logger)
+        self._record_usb_reset_attempt(reason, success)
+        if not success:
+            return
+        # reset() invalidates the libusb handle: dispose it and let
+        # configure_virtual_sinks() re-detect the (possibly re-addressed)
+        # device from scratch, same as any other same-device re-enumeration.
+        usb.util.dispose_resources(self.usb_device)
+        self.usb_device = None
+        await asyncio.sleep(_USB_RESET_SETTLE_S)
+        self.configure_virtual_sinks()
+
+    def _record_usb_reset_attempt(self, reason: str, success: bool) -> None:
+        """Breadcrumb for bug reports (#238).
+
+        _resume_reset_attempted / _last_usb_reset_monotonic are in-memory
+        guards that die with the process; without this, a bug report from a
+        fresh daemon run can never show whether a resume-time reset ever
+        fired, or when — which is exactly the fact a "still dead after
+        resume" report needs. See bug_reporter.collect_system_info.
+        """
+        try:
+            state: dict = {}
+            if _RESUME_RESET_STATE_PATH.exists():
+                state = json.loads(_RESUME_RESET_STATE_PATH.read_text())
+            state['last_attempt_epoch'] = time.time()
+            state['last_reason'] = reason
+            state['last_success'] = success
+            state['attempts'] = int(state.get('attempts', 0)) + 1
+            _RESUME_RESET_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _RESUME_RESET_STATE_PATH.write_text(json.dumps(state))
+        except Exception as e:  # noqa: BLE001 — diagnostics must never break resume
+            self.logger.debug("Could not persist USB reset breadcrumb: %r", e)
 
     def _release_usb_handle(self) -> None:
         """Release the current libusb handle without performing a full teardown.

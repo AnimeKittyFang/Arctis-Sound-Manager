@@ -50,6 +50,13 @@ device:
     position: end
     filler: 0x00
 
+  # Issue #238: ChatMix stays dead after a system suspend/resume until the DAC
+  # is physically replugged. The generic post-resume status probe can't cover
+  # this device (its status.request is report-id-prefixed, see
+  # CoreEngine.resume_from_sleep), so escalate straight to a USB reset on every
+  # resume rather than only on a probe failure.
+  reset_on_resume: true
+
   # Control/data interface = 3 (64-byte Interrupt IN on EP 0x83); interface 4 is
   # the 2-byte consumer-control endpoint. Confirmed via asm-cli tools arctis-devices.
 

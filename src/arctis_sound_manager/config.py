@@ -276,6 +276,10 @@ class DeviceConfiguration:
     # profile declares `hardware_eq.readback`, which only happens for
     # families whose spec was checked directly for these opcodes.
     hardware_eq_readback: HardwareEqReadback | None
+    # Opt-in escalation for issue #238: force a USB reset on system resume
+    # instead of relying on the generic post-resume status probe. Only the
+    # Nova Pro Omni declares this — see resume_from_sleep() in core.py.
+    reset_on_resume: bool
 
     def __init__(self, raw_configuration: dict[str, Any]):
         raw_config: dict[str, Any] | None = raw_configuration.get('device', None)
@@ -292,6 +296,7 @@ class DeviceConfiguration:
         # True for the profile that stands in for 'no SteelSeries hardware'.
         # See the validation block below and _setup_generic_device (#189).
         self.generic = bool(raw_config.get('generic', False))
+        self.reset_on_resume = bool(raw_config.get('reset_on_resume', False))
         self.command_interface_index = raw_config.get('command_interface_index', (-1, -1))
         # The HID usage page the vendor interface declares, from SteelSeries'
         # own (sync-interface <page> …). Their specifications address an
