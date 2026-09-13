@@ -1,3 +1,25 @@
+arctis-sound-manager (1.4.25-1) noble; urgency=medium
+
+  * **Nova Pro Omni: the ChatMix knob did nothing after boot until the
+    daemon
+  * A failed init frame was never retried. send_command() logs USB errors
+  * **ChatMix on the Nova Pro Omni also stayed dead specifically after a
+    system
+  * ASM never told the DAC it was leaving. SteelSeries' own engine sends
+  * **After the *wireless* headset itself reconnects (powers back on, or
+    comes
+  * DeepFilterNet noise cancellation silently stopped the microphone.
+  * **A native (non-PulseAudio) application stream with no application.name
+  * **The external Output channel could get silently and permanently stuck
+  * **GameBuds: the Volume Limiter and Wear Sense toggles were silently
+  * Bug reports no longer leak the weather widget's raw GPS coordinates
+  * **GameBuds: ANC intensity, and independent playback volume per
+    connection
+  * 4 new Sonar presets from SteelSeries GG 119.0.0: Bombanana!, Mortal
+    Shell
+
+ -- loteran <axel.valadon@gmail.com>  Sun, 13 Sep 2026 00:00:00 +0000
+
 arctis-sound-manager (1.4.24-1) noble; urgency=medium
 
   * Volume Boost had no audible effect with Spatial Audio on. The HeSuVi
