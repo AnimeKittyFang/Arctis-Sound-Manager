@@ -77,9 +77,19 @@ device:
   #   • 0x09 save_to_flash after each deploy — pointless flash wear on every start,
   #   • fixed stream-mix / line-out / Bluetooth values — those are the user's
   #     state, not ours to overwrite at boot.
+  # The two mode switches need a settle time. The DAC accepts the SET_REPORT
+  # and then abandons the switch if the next command arrives within a few
+  # milliseconds — which is every ASM start, since init fires its frames 6 ms
+  # apart. The symptom is a ChatMix knob that does nothing after boot (no
+  # mixer on the OLED, no 0x0745 events, only 0x0725 volume frames) until the
+  # daemon is restarted by hand. Verified on hardware: the same frames spaced
+  # by one second engage the mixer every time; a settle after 0x49 alone was
+  # not tested, so both get one.
   device_init:
     - [0x01, 0x8d, 0x01]                           # set_sonar_present ON
+    - ['sleep', 1000]
     - [0x01, 0x49, 0x01]                           # software chatmix ON
+    - ['sleep', 1000]
     - [0x01, 0x20]                                 # audio_settings query
     - [0x01, 0x10]                                 # fw_versions query
     - [0x01, 0x80]                                 # ux_settings query

@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Nova Pro Omni: the ChatMix knob did nothing after boot until the daemon
+  was restarted.** The base station only reports its mixer to the PC once
+  software has switched it into that mode (0x8d sonar-present, 0x49 software
+  ChatMix). It accepts both commands and then abandons the switch if the next
+  command lands within a few milliseconds — which it always did, since init
+  sends its frames 6 ms apart. Pressing the knob showed no mixer, turning it
+  only moved the station volume, and restarting the daemon by hand replayed
+  the same too-fast burst. Profiles can now put `['sleep', <ms>]` in
+  `device_init`; the Omni waits a second after each mode switch. Verified on
+  hardware, including from a cold base station.
+- **A failed init frame was never retried.** `send_command()` logs USB errors
+  and returns, it does not raise, so the "retry once" written around it in the
+  init sequence could never fire. It now reports failure and the retry runs.
+
 ## [1.4.24] - 8 September 2026
 
 ### Fixed
