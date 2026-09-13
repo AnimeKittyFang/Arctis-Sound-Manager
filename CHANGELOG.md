@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.25] - 13 September 2026
+
 ### Fixed
 
 - **Nova Pro Omni: the ChatMix knob did nothing after boot until the daemon
@@ -18,10 +20,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only moved the station volume, and restarting the daemon by hand replayed
   the same too-fast burst. Profiles can now put `['sleep', <ms>]` in
   `device_init`; the Omni waits a second after each mode switch. Verified on
-  hardware, including from a cold base station.
+  hardware, including from a cold base station. Contributed by @kevinpbaker.
+  (#238, #235, #245)
 - **A failed init frame was never retried.** `send_command()` logs USB errors
   and returns, it does not raise, so the "retry once" written around it in the
   init sequence could never fire. It now reports failure and the retry runs.
+- **ChatMix on the Nova Pro Omni also stayed dead specifically after a system
+  resume, on top of the boot-time issue above.** `resume_from_sleep()` used
+  to replay `device_init` over the same libusb handle that had just survived
+  suspend; on this family that left the ChatMix event stream dead until a
+  physical replug even though ordinary commands kept working.
+  `configure_virtual_sinks()` — the already-tested path that properly
+  releases and re-acquires a same-device re-enumeration — is used instead.
+  Checking SteelSeries' own engine specification against ASM turned up two
+  more protocol timings ASM never respected on any profile: a firmware-family
+  minimum spacing between consecutive commands (`time_between_commands_ms`,
+  1-50ms depending on family) and a settle time the transmitter needs after
+  enumerating before it can be talked to at all (`init_sleep_length_ms`, up
+  to 5s on the Nova Pro Omni/Elite/Wireless/GameDAC family) — both are now
+  honoured for every headset profile, sourced from SteelSeries' own
+  specifications. The device settle wait runs off the USB hotplug thread via
+  a background timer so it can never delay detecting other USB devices.
+  (#238)
+- **ASM never told the DAC it was leaving.** SteelSeries' own engine sends
+  disable-ChatMix/disable-Sonar to the Nova Pro Omni/Elite/Wireless/Wired and
+  Nova 3 Wireless families before releasing the USB interface, so the base
+  station falls back to plain hardware volume instead of staying in
+  software-ChatMix mode with nothing driving it once the host goes away.
+  `teardown()` now does the same, best-effort, on every daemon stop or
+  disconnect.
+- **After the *wireless* headset itself reconnects (powers back on, or comes
+  back into range), ASM trusted the very first settings read/replay attempt
+  instead of retrying.** SteelSeries' own engine retries a status read up to
+  10 times after a radio reconnect on several families, because the first
+  attempt(s) right after reconnect can come back stale — ASM's own settings
+  replay now does the same before pushing anything back to the device,
+  falling back to the old flat-delay behaviour on families where this was
+  never observed to matter.
+- **DeepFilterNet noise cancellation silently stopped the microphone.**
+  `generate_sonar_micro_conf()` assumed every LADSPA node in the micro chain
+  exposes ports named "Input"/"Output" — true for RNNoise, the noise gate and
+  the compressor, but DeepFilterNet's plugin names them "Audio In"/"Audio
+  Out" instead. The generated filter-chain config referenced ports the
+  loaded plugin doesn't have: no audio path was built and the mic went
+  silent with the node still "running", no crash, nothing in the logs.
+  Configs already broken by this are now auto-detected and repaired instead
+  of staying stuck. (#240)
+- **A native (non-PulseAudio) application stream with no `application.name`
+  property was invisible to the mixer, even though it was still playing and
+  still moved by the Output volume slider.** `get_native_streams()` only
+  looked at that one property to identify a stream; a raw ALSA/native client
+  that never sets it — reported case: SMAPI-launched Stardew Valley, a
+  .NET/Mono app under Distrobox — was silently dropped instead of falling
+  back to `node.name`/`application.process.binary`, so there was no way to
+  drag it onto Game/Chat/Media. (#243)
+- **The external Output channel could get silently and permanently stuck
+  pointing at nothing after a device was connected while ASM was already
+  running** (e.g. a TV switched on over HDMI). Resolving the new device's
+  sink can fail on the very first attempt because it hasn't finished
+  settling in the PipeWire graph yet; that empty result used to get locked
+  in as "reconciled" regardless, so the watchdog never retried it even once
+  the device was fully there. Only a full daemon restart used to force a
+  fresh resolution. (#246)
+- **GameBuds: the Volume Limiter and Wear Sense toggles were silently
+  swapped**, each one controlling the other's feature, since the profile's
+  opcodes didn't match SteelSeries' own specification (0x27 is actually the
+  volume limiter, 0xc5 is actually wear sense).
+- Bug reports no longer leak the weather widget's raw GPS coordinates
+  (`weather_lat`/`weather_lon`) — they were the one field the existing
+  "location"/"city" redaction patterns didn't match, while the city name
+  next to them was correctly stripped.
+
+### Added
+
+- **GameBuds: ANC intensity, and independent playback volume per connection
+  type (Bluetooth / 2.4GHz dongle).** ANC has its own intensity memory on the
+  device, separate from the existing Transparency level control, and was not
+  previously adjustable at all.
+- 4 new Sonar presets from SteelSeries GG 119.0.0: Bombanana!, Mortal Shell
+  II, The Sinking City 2, Tukoni: Forest Keepers.
 
 ## [1.4.24] - 8 September 2026
 
