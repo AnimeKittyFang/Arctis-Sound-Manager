@@ -586,6 +586,32 @@ def test_micro_conf_deepfilter_engine_emits_deep_filter_node(monkeypatch):
     assert "label = deep_filter_mono" in text
     assert '"Attenuation Limit (dB)" = 80.0' in text
     assert "noise_suppressor_mono" not in text
+    # DeepFilterNet's LADSPA descriptor names its audio ports "Audio In" /
+    # "Audio Out", not the generic "Input"/"Output" every other LADSPA node in
+    # this chain uses — a link or outputs= referencing the wrong name is a
+    # port the loaded plugin doesn't have, and filter-chain builds no working
+    # audio path (mic goes silent with no crash — issue #240).
+    assert '  input = "dfn:Audio In" }' in text
+    assert 'outputs = [ "dfn:Audio Out" ]' in text
+    assert ":Input\"" not in text
+    assert '"dfn:Output"' not in text
+
+
+def test_micro_conf_deepfilter_then_compressor_link_uses_audio_out_port(monkeypatch):
+    """DeepFilterNet followed by the compressor must link from dfn's actual
+    output port ("Audio Out"), not the generic "Output" every other LADSPA
+    node here uses — same #240 port-name bug, on the node-to-node link."""
+    monkeypatch.setattr(_s2p, "_deepfilter_plugin_ref",
+                        lambda: "/home/u/.ladspa/libdeep_filter_ladspa.so")
+    monkeypatch.setattr(_s2p, "_ladspa_plugin_ref",
+                        lambda pattern, resolved=None: f"/home/u/.ladspa/{pattern}")
+    text = _s2p.generate_sonar_micro_conf(
+        [], 0.0, 0.0, 0.0, output_path=Path("/dev/null"),
+        noise_canceling={"enabled": True, "value": 0.8, "engine": "deepfilternet"},
+        noise_reduction={"compressor": {"enabled": True, "value": 0.5}},
+    )
+    assert '{ output = "dfn:Audio Out"  input = "comp:Input" }' in text
+    assert '"dfn:Output"' not in text
 
 
 def test_micro_conf_deepfilter_skipped_when_plugin_absent(monkeypatch):
@@ -819,6 +845,31 @@ def test_check_and_fix_stale_configs_fixes_micro_source_virtual(tmp_path):
     fixed = (tmp_path / "sonar-micro-eq.conf").read_text()
     assert "Audio/Source/Virtual" not in fixed
     assert "media.class           = Audio/Source" in fixed
+
+
+def test_check_and_fix_stale_configs_fixes_deepfilter_wrong_ports(tmp_path):
+    """A pre-#240 micro config wired DeepFilterNet with the generic LADSPA
+    port names ("dfn:Input"/"dfn:Output") instead of its actual "Audio In"/
+    "Audio Out" — filter-chain built no working audio path and the mic went
+    silent. Such a config must be detected as stale and regenerated."""
+    stale = (
+        'context.modules = [\n'
+        '  { name = libpipewire-module-filter-chain\n'
+        '    args = { filter.graph = { links = [\n'
+        '      { output = "boost:Out"  input = "dfn:Input" }\n'
+        '    ] }\n'
+        '    outputs = [ "dfn:Output" ] } }\n'
+        ']\n'
+    )
+    (tmp_path / "sonar-micro-eq.conf").write_text(stale)
+
+    with patch("arctis_sound_manager.sonar_to_pipewire._CONF_DIR", tmp_path):
+        fixed, _needs_pw_restart = check_and_fix_stale_configs()
+        assert fixed is True
+
+    fixed_content = (tmp_path / "sonar-micro-eq.conf").read_text()
+    assert '"dfn:Input"' not in fixed_content
+    assert '"dfn:Output"' not in fixed_content
 
 
 # ── generate_virtual_sinks_conf — deprecated shim behaviour ──────────────────
