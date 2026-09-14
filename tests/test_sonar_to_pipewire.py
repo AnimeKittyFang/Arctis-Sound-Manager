@@ -1929,15 +1929,17 @@ def test_media_eq_always_8ch_regardless_of_spatial():
 def test_game_media_eq_own_their_output_link():
     """Phase 3: game/media EQ playback runs with node.autoconnect=false +
     state.restore-target=false so ASM owns the EQ→target link (issue #100
-    pattern) and can move it live on a Spatial toggle. Chat (physical target,
-    never toggled) does NOT get autoconnect=false."""
+    pattern) and can move it live on a Spatial toggle. Chat also owns its
+    link (issue #242) — without it PipeWire locks the node's negotiated
+    format to the native mono chat PCM at load, so a later runtime relink to
+    a user-chosen external stereo device only has one source channel to
+    connect, playing mono/left-only."""
     game = generate_sonar_eq_conf("game", [], 0.0, 0.0, 0.0, output_path=Path("/dev/null"))
     media = generate_sonar_eq_conf("media", [], 0.0, 0.0, 0.0, output_path=Path("/dev/null"))
-    for text in (game, media):
+    chat = generate_sonar_eq_conf("chat", [], 0.0, 0.0, 0.0, output_path=Path("/dev/null"))
+    for text in (game, media, chat):
         assert "node.autoconnect     = false" in text
         assert "state.restore-target = false" in text
-    chat = generate_sonar_eq_conf("chat", [], 0.0, 0.0, 0.0, output_path=Path("/dev/null"))
-    assert "node.autoconnect     = false" not in chat
 
 
 def test_active_game_eq_owns_link_with_bands():
@@ -1945,6 +1947,16 @@ def test_active_game_eq_owns_link_with_bands():
     path too, not only the bypass copy path."""
     bands = [EqBand(freq=1000, gain=3.0, q=0.7, type="peakingEQ", enabled=True)]
     text = generate_sonar_eq_conf("game", bands, 0.0, 0.0, 0.0, output_path=Path("/dev/null"))
+    assert "node.autoconnect     = false" in text
+    assert "state.restore-target = false" in text
+
+
+def test_active_chat_eq_owns_link_with_bands():
+    """Issue #242: the autoconnect=false hint is present on the active
+    (non-bypass) 2ch chat path too, not only the bypass copy path — a
+    non-flat chat EQ must not collapse to mono/left-only either."""
+    bands = [EqBand(freq=1000, gain=3.0, q=0.7, type="peakingEQ", enabled=True)]
+    text = generate_sonar_eq_conf("chat", bands, 0.0, 0.0, 0.0, output_path=Path("/dev/null"))
     assert "node.autoconnect     = false" in text
     assert "state.restore-target = false" in text
 

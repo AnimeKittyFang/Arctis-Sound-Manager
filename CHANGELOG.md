@@ -22,7 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot run the SIGTERM handler. The listen loop now sleeps outside the lock,
   and the resume and USB-reset paths run detection off the event loop,
   deferring to a detection already in flight rather than queueing a second
-  one. Diagnosed from a py-spy dump of the hung process.
+  one. Diagnosed from a py-spy dump of the hung process. Contributed by
+  @kevinpbaker. (#238)
+- Chat channel routed to an external output device now stays stereo instead of collapsing to mono/left-only, since ASM now owns its link (PipeWire no longer force-negotiates the chat EQ output to the headset's native mono PCM format). (#242)
 
 ## [1.4.25] - 13 September 2026
 
