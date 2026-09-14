@@ -2040,6 +2040,29 @@ class HomePage(QWidget):
         _save_hidden_apps(self._hidden_apps)
         self._poll_volumes()
 
+    # ASM's own filter-chain / loopback nodes (effect_output.sonar-*-eq,
+    # effect_input.virtual-surround-*, Arctis_<Channel>_sink_out — see
+    # sonar_to_pipewire.py's _hesuvi_output_node()/_hesuvi_input_node() and
+    # loopback_manager.py's LoopbackSpec playback names) have neither
+    # application.name nor application.process.binary set, so
+    # get_native_streams() falls back to their raw node.name as "app_name".
+    # If one of these is ever (even transiently, e.g. a routing race) linked
+    # to a channel's virtual sink, it must never be shown as a user app
+    # dragged onto that channel. This is separate from, and additive to,
+    # _INTERNAL_BINARIES/_INTERNAL_MEDIA_HINTS above, which filter a
+    # different code path (PulseAudio sink-inputs in "Other applications").
+    _ASM_NODE_NAME_PREFIXES = ("effect_output.", "effect_input.")
+    _ASM_LOOPBACK_PLAYBACK_NAMES = frozenset(
+        f"Arctis_{ch}_sink_out" for ch in ("Game", "Chat", "Media", "Aux")
+    )
+
+    @classmethod
+    def _is_asm_internal_node(cls, node_name: str) -> bool:
+        return (
+            node_name.startswith(cls._ASM_NODE_NAME_PREFIXES)
+            or node_name in cls._ASM_LOOPBACK_PLAYBACK_NAMES
+        )
+
     def _update_native_apps(self, pulse_sinks, already_shown: set[str] = frozenset(),
                             *, rescan: bool = True):
         """Add native PipeWire streams (e.g. haruna/mpv) to the correct card.
@@ -2068,6 +2091,9 @@ class HomePage(QWidget):
         for s in native:
             if s["app_name"] in already_shown:
                 continue  # already listed via PulseAudio
+            node_name = s.get("props", {}).get("node.name", "") or s["app_name"]
+            if self._is_asm_internal_node(node_name):
+                continue  # ASM's own node, not a user application
             sink_name = s.get("sink_name") or ""
             card = next((c for bound, c in card_map.items() if bound in sink_name), None)
             if card is None:
