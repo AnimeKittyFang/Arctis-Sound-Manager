@@ -49,6 +49,7 @@ def _make_engine(device_config):
     engine = CoreEngine.__new__(CoreEngine)
     engine.logger = MagicMock()
     engine._device_lock = threading.RLock()
+    engine._detect_lock = threading.Lock()  # consulted by _configure_virtual_sinks_off_loop
     engine.usb_device = MagicMock(name='usb_device', idProduct=0x2290, bus=1, port_numbers=(6,))
     engine.device_config = device_config
     engine.oled_manager = None

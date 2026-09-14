@@ -212,6 +212,7 @@ def test_resume_from_sleep_waits_on_the_configured_event():
     engine._resume_reset_attempted = False
     engine._last_usb_reset_monotonic = 0.0
     engine._release_usb_handle = MagicMock()
+    engine._detect_lock = threading.Lock()  # consulted by _configure_virtual_sinks_off_loop
     engine.configure_virtual_sinks = MagicMock()
     engine.request_device_status = MagicMock()
     engine._await_raw_response = AsyncMock(return_value=[0xb0, 1, 2])

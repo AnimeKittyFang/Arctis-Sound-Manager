@@ -1819,11 +1819,21 @@ class CoreEngine:
         # before, because gather() held the turn until the slowest interface
         # finished, which quietly paced the failing ones too. Waiting on the
         # first completed read removed that accidental brake.
+        # Snapshot under the lock, sleep outside it. This used to await inside
+        # the `with`, which parks the coroutine while the event-loop thread
+        # still owns the RLock. Anything else needing _device_lock from
+        # another thread then blocks until this coroutine is resumed - and it
+        # is not resumed if the loop thread itself goes on to block
+        # synchronously. That is exactly the wake-from-suspend deadlock (#238,
+        # 1.4.25): the pyudev thread in configure_virtual_sinks() waited here
+        # holding _detect_lock, while resume_from_sleep() sat in a blocking
+        # _detect_lock.acquire() on the loop thread. Neither could move, and
+        # the daemon stayed frozen until SIGKILL.
         with self._device_lock:
-            if self.usb_device is None:
-                await asyncio.sleep(_LISTEN_IDLE_BACKOFF_S)
-                return
             usb_device = self.usb_device
+        if usb_device is None:
+            await asyncio.sleep(_LISTEN_IDLE_BACKOFF_S)
+            return
 
         endpoint, max_packet_size = self.guess_interface_endpoint('in', interface_id)
 
@@ -4463,6 +4473,35 @@ class CoreEngine:
         self.logger.info("prepare_for_sleep: releasing USB handle before system suspend")
         self._release_usb_handle()
 
+    async def _configure_virtual_sinks_off_loop(self, context: str) -> None:
+        """Run configure_virtual_sinks() without blocking the event loop.
+
+        configure_virtual_sinks() starts with a blocking _detect_lock.acquire()
+        and later takes _device_lock. Called synchronously from a coroutine,
+        as resume_from_sleep() and _escalate_to_usb_reset() did, that acquire
+        stalls the whole event loop whenever another thread is already
+        detecting - which on wake from suspend is the normal case, since the
+        pyudev observer sees the same re-enumeration a few milliseconds
+        earlier. With the loop stalled, no coroutine holding _device_lock can
+        ever release it, and the two threads deadlock (#238, 1.4.25).
+
+        Two rules follow. A detection already in flight is left alone rather
+        than queued behind - it is doing the work this call wanted done, and
+        running a second one right after it would release the freshly claimed
+        handle again (the EBUSY window on_device_connected() avoids the same
+        way). Otherwise the call goes to the default executor, where blocking
+        is harmless. Either way the caller then waits on
+        _device_configured_event, which the running detection sets when done.
+        """
+        if self._detect_lock.locked():
+            self.logger.info(
+                "%s: a device detection is already running (udev saw the "
+                "re-enumeration) - waiting for it instead of starting another",
+                context)
+            return
+        await asyncio.get_running_loop().run_in_executor(
+            None, self.configure_virtual_sinks)
+
     async def resume_from_sleep(self) -> None:
         """Called from PrepareForSleep(False) — the system just woke up.
 
@@ -4477,7 +4516,7 @@ class CoreEngine:
         self.logger.info(
             "resume_from_sleep: re-acquiring device (was: init_device on the "
             "old handle, #238)")
-        self.configure_virtual_sinks()
+        await self._configure_virtual_sinks_off_loop("resume_from_sleep")
 
         # configure_virtual_sinks() can return before it is actually done: a
         # profile with init_sleep_length_ms (#238/#245 family) defers the
@@ -4569,7 +4608,10 @@ class CoreEngine:
         usb.util.dispose_resources(self.usb_device)
         self.usb_device = None
         await asyncio.sleep(_USB_RESET_SETTLE_S)
-        self.configure_virtual_sinks()
+        # A reset re-enumerates the device, so the pyudev thread is very
+        # likely already in configure_virtual_sinks() by now - same hazard as
+        # on resume, same answer.
+        await self._configure_virtual_sinks_off_loop("usb_reenumerate")
 
     def _record_usb_reset_attempt(self, reason: str, success: bool) -> None:
         """Breadcrumb for bug reports (#238).
