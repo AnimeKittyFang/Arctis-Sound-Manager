@@ -4,6 +4,7 @@
 """Tests for sonar_to_pipewire — filter-chain config generation."""
 
 import re
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -2277,12 +2278,20 @@ def test_ensure_physical_output_links_output_fallback_respects_skip_targets(
 ):
     """The Output channel's fallback-to-headset path (external sink absent)
     resolves to the same physical game output — it must honour skip_targets
-    too, not just the primary chat/hesuvi hops."""
+    too, not just the primary chat/hesuvi hops.
+
+    The grace period (#246) is simulated as already elapsed so this actually
+    reaches the fallback attempt and exercises skip_targets, rather than
+    being masked by the grace gate itself (which would also produce an empty
+    result, but for the wrong reason)."""
     monkeypatch.setattr(_s2p_p3, "_get_physical_out_chat", lambda: "")
     monkeypatch.setattr(_s2p_p3, "_get_physical_out_game", lambda: "alsa_output.test-game")
     monkeypatch.setattr(_s2p_p3, "_CONF_DIR", tmp_path)
     _write_output_conf(tmp_path, "alsa_output.absent-external-sink")
     monkeypatch.setattr(_s2p_p3, "_node_in_graph", lambda data, name: False)
+    monkeypatch.setattr(time, "monotonic", lambda: 1000.0)
+    monkeypatch.setattr(_s2p_p3, "_output_absent_since",
+                        1000.0 - _s2p_p3._OUTPUT_FALLBACK_GRACE_S - 1.0, raising=False)
 
     called = []
     monkeypatch.setattr(
@@ -3746,8 +3755,17 @@ def test_generating_to_an_explicit_path_leaves_the_snapshot_alone(tmp_path, monk
 # ── SD-1: the Output channel's device can disappear ─────────────────────────
 
 
-def _output_hop_setup(monkeypatch, configured, graph_nodes):
-    """Only the Output hop active: no chat/game physical targets."""
+def _output_hop_setup(monkeypatch, configured, graph_nodes, *,
+                      absent_since=None, now=1000.0):
+    """Only the Output hop active: no chat/game physical targets.
+
+    ``absent_since``/``now`` control the grace-period state (#246): by
+    default this simulates a completely fresh watchdog — the configured sink
+    has never been seen absent yet — which is the "daemon just started"
+    case. Pass ``absent_since=<some time before now - _OUTPUT_FALLBACK_GRACE_S>``
+    to simulate the grace period having already elapsed (the "monitor has
+    genuinely been off for a while" steady-state case) instead.
+    """
     monkeypatch.setattr(_s2p_p3, "_get_physical_out_chat", lambda: "")
     monkeypatch.setattr(_s2p_p3, "_get_physical_out_game", lambda: "alsa_output.headset")
     monkeypatch.setattr(_s2p_p3, "channel_destination", lambda ch, data=None: "")
@@ -3755,6 +3773,8 @@ def _output_hop_setup(monkeypatch, configured, graph_nodes):
     monkeypatch.setattr(_s2p_p3, "_node_in_graph",
                         lambda data, name: name in graph_nodes)
     monkeypatch.setattr(_s2p_p3, "_output_fallback_active", None, raising=False)
+    monkeypatch.setattr(_s2p_p3, "_output_absent_since", absent_since, raising=False)
+    monkeypatch.setattr(time, "monotonic", lambda: now)
     calls = []
     monkeypatch.setattr(
         "arctis_sound_manager.pw_utils.ensure_loopback_link",
@@ -3763,13 +3783,21 @@ def _output_hop_setup(monkeypatch, configured, graph_nodes):
     return calls
 
 
+def _grace_elapsed_since(now):
+    """A first-seen-absent timestamp that has already cleared the grace
+    period as of ``now`` — i.e. the "genuinely gone for a while" case."""
+    return now - _s2p_p3._OUTPUT_FALLBACK_GRACE_S - 1.0
+
+
 def test_output_channel_falls_back_to_the_headset_when_its_device_is_gone(monkeypatch):
-    """SD-1: the monitor is switched off / the Bluetooth speaker walks away.
-    Skipping the hop left everything routed to Output playing into a dead end,
-    silently and for ever, whenever the tray GUI was not running to fall back
-    itself. Game/Chat/Media never had that gap."""
+    """SD-1 steady state: the monitor has been off long enough that the grace
+    period (#246) has elapsed. Skipping the hop left everything routed to
+    Output playing into a dead end, silently and for ever, whenever the tray
+    GUI was not running to fall back itself. Game/Chat/Media never had that
+    gap."""
     calls = _output_hop_setup(monkeypatch, "alsa_output.hdmi-tv",
-                              {"alsa_output.headset"})
+                              {"alsa_output.headset"},
+                              absent_since=_grace_elapsed_since(1000.0))
 
     result = _s2p_p3.ensure_physical_output_links()
 
@@ -3779,11 +3807,14 @@ def test_output_channel_falls_back_to_the_headset_when_its_device_is_gone(monkey
 
 def test_output_fallback_does_not_rewrite_the_users_choice(monkeypatch):
     """The fallback is a link, not a decision: the setting stays put so the
-    channel returns to the external sink on its own when it comes back."""
+    channel returns to the external sink on its own when it comes back.
+    Simulates the grace period already elapsed so the fallback actually
+    fires this tick (#246)."""
     written = []
     monkeypatch.setattr(_s2p_p3, "_sync_output_setting_snapshot",
                         lambda *a, **kw: written.append(a), raising=False)
-    _output_hop_setup(monkeypatch, "alsa_output.hdmi-tv", {"alsa_output.headset"})
+    _output_hop_setup(monkeypatch, "alsa_output.hdmi-tv", {"alsa_output.headset"},
+                      absent_since=_grace_elapsed_since(1000.0))
 
     _s2p_p3.ensure_physical_output_links()
 
@@ -3800,16 +3831,120 @@ def test_output_hop_prefers_the_configured_sink_when_it_is_present(monkeypatch):
 
 
 def test_output_hop_stays_quiet_with_no_headset_to_fall_back_to(monkeypatch):
-    """Configured sink gone and no headset either: nothing to link, and no
-    link attempt to log in a loop."""
+    """Configured sink gone (grace period already elapsed) and no headset
+    either: nothing to link, and no link attempt to log in a loop."""
     monkeypatch.setattr(_s2p_p3, "_get_physical_out_game", lambda: "")
-    calls = _output_hop_setup(monkeypatch, "alsa_output.hdmi-tv", set())
+    calls = _output_hop_setup(monkeypatch, "alsa_output.hdmi-tv", set(),
+                              absent_since=_grace_elapsed_since(1000.0))
     monkeypatch.setattr(_s2p_p3, "_get_physical_out_game", lambda: "")
 
     result = _s2p_p3.ensure_physical_output_links()
 
     assert calls == []
     assert "output" not in result
+
+
+def test_output_hop_stays_quiet_during_the_startup_grace_period(monkeypatch):
+    """The fix for the reported bug: at daemon startup the configured sink
+    (a TV over HDMI) hasn't enumerated yet. On the very FIRST tick where it
+    is found absent, even though a headset IS available as a fallback,
+    Output must stay silent/unlinked rather than transiently routing through
+    the headset — this is what stops the "plays through the headset, then
+    switches to the TV a few seconds later" symptom (#246)."""
+    calls = _output_hop_setup(monkeypatch, "alsa_output.hdmi-tv",
+                              {"alsa_output.headset"})
+
+    result = _s2p_p3.ensure_physical_output_links()
+
+    assert calls == []
+    assert "output" not in result
+
+
+def test_output_hop_falls_back_once_the_grace_period_elapses(monkeypatch):
+    """Hysteresis (#246): the first tick establishes "first seen absent" and
+    stays silent; once the mocked clock advances past the grace constant, a
+    second tick actually produces the headset fallback link."""
+    calls = _output_hop_setup(monkeypatch, "alsa_output.hdmi-tv",
+                              {"alsa_output.headset"}, now=1000.0)
+
+    first = _s2p_p3.ensure_physical_output_links()
+    assert calls == []
+    assert "output" not in first
+
+    monkeypatch.setattr(
+        time, "monotonic",
+        lambda: 1000.0 + _s2p_p3._OUTPUT_FALLBACK_GRACE_S + 1.0,
+    )
+    second = _s2p_p3.ensure_physical_output_links()
+
+    assert calls == [("effect_output.sonar-output-eq", "alsa_output.headset")]
+    assert second == {"output": True}
+
+
+def test_output_hop_grace_period_restarts_after_the_sink_reappears(monkeypatch):
+    """The sink disappears, comes back before the grace period elapses, then
+    disappears again later — the second absence must get its own full grace
+    window rather than inheriting elapsed time from the first (per the
+    "reset to None whenever the target IS found present" requirement)."""
+    monkeypatch.setattr(_s2p_p3, "_get_physical_out_chat", lambda: "")
+    monkeypatch.setattr(_s2p_p3, "_get_physical_out_game", lambda: "alsa_output.headset")
+    monkeypatch.setattr(_s2p_p3, "channel_destination", lambda ch, data=None: "")
+    monkeypatch.setattr(_s2p_p3, "_get_configured_external_output",
+                        lambda: "alsa_output.hdmi-tv")
+    monkeypatch.setattr(_s2p_p3, "_output_fallback_active", None, raising=False)
+    monkeypatch.setattr(_s2p_p3, "_output_absent_since", None, raising=False)
+
+    tv_present = {"value": False}
+    monkeypatch.setattr(
+        _s2p_p3, "_node_in_graph",
+        lambda data, name: (
+            tv_present["value"] if name == "alsa_output.hdmi-tv"
+            else name == "alsa_output.headset"
+        ),
+    )
+
+    calls = []
+    monkeypatch.setattr(
+        "arctis_sound_manager.pw_utils.ensure_loopback_link",
+        lambda playback, target, data=None: calls.append((playback, target)) or True,
+    )
+
+    grace = _s2p_p3._OUTPUT_FALLBACK_GRACE_S
+
+    # t=1000: sink absent for the first time -> silent (grace not elapsed).
+    monkeypatch.setattr(time, "monotonic", lambda: 1000.0)
+    r1 = _s2p_p3.ensure_physical_output_links()
+    assert calls == []
+    assert "output" not in r1
+
+    # t=1002: sink reappears -> resets the grace timer and links straight to it.
+    tv_present["value"] = True
+    monkeypatch.setattr(time, "monotonic", lambda: 1002.0)
+    r2 = _s2p_p3.ensure_physical_output_links()
+    assert calls == [("effect_output.sonar-output-eq", "alsa_output.hdmi-tv")]
+    assert r2 == {"output": True}
+    calls.clear()
+
+    # t=1003: sink absent again — a SECOND, independent window begins.
+    tv_present["value"] = False
+    monkeypatch.setattr(time, "monotonic", lambda: 1003.0)
+    r3 = _s2p_p3.ensure_physical_output_links()
+    assert calls == []
+    assert "output" not in r3
+
+    # t=1011: only 8s into the second window (< grace), even though it is
+    # 11s past the ORIGINAL t=1000 absence (> grace) — must still be silent,
+    # proving the timer actually restarted rather than reusing t=1000.
+    monkeypatch.setattr(time, "monotonic", lambda: 1011.0)
+    r4 = _s2p_p3.ensure_physical_output_links()
+    assert calls == []
+    assert "output" not in r4
+
+    # t=1014: 11s into the second window (> grace) -> falls back now.
+    monkeypatch.setattr(time, "monotonic", lambda: 1003.0 + grace + 1.0)
+    r5 = _s2p_p3.ensure_physical_output_links()
+    assert calls == [("effect_output.sonar-output-eq", "alsa_output.headset")]
+    assert r5 == {"output": True}
 
 
 def test_a_failed_snapshot_write_does_not_take_the_conf_down_with_it(tmp_path, monkeypatch):

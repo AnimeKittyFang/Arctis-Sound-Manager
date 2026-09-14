@@ -1460,7 +1460,13 @@ def generate_sonar_eq_conf(
     # node's negotiated format to that 1-channel target at load time — so a
     # later runtime relink to a user-chosen external stereo device only has
     # one source channel to connect, playing mono/left-only.
-    owns_link = channel in spatial_channels() or channel == "chat"
+    # Output also owns its link (issue #246): without node.autoconnect=false,
+    # a device that hasn't enumerated yet at daemon startup (a TV still
+    # waking from standby) leaves WirePlumber's own default-sink policy free
+    # to grab the freshly-created node and connect it to whatever is
+    # currently the default sink — the headset — before ASM's watchdog
+    # (ensure_physical_output_links) ever gets a say.
+    owns_link = channel in spatial_channels() or channel in ("chat", "output")
     sink_name = f"effect_input.sonar-{channel}-eq"
 
     # Only a conf written to the channel's real path represents the live EQ;
@@ -3799,15 +3805,40 @@ def _get_configured_external_output() -> str:
         current_setting, conf_target, snapshot,
     )
     resolved_target, channels, position = _resolve_external_output()
+    # This reconciliation path only ever regenerates the Output channel's own
+    # conf (hardcoded "output" above), so it owns its link exactly like the
+    # primary generate_sonar_eq_conf() call site now does (issue #246).
     _regenerate_eq_conf(
         "output", conf_path, "effect_input.sonar-output-eq",
-        resolved_target, channels, position, owns_link=False, log=_log,
+        resolved_target, channels, position, owns_link=True, log=_log,
         reason="external_output_device setting changed",
     )
     return resolved_target
 
 
 _output_fallback_active: str | None = None
+
+# How long the Output channel's last hop tolerates its configured external
+# sink being absent from the graph before falling back to the headset (SD-1).
+# The watchdog ticks every 5 s (see _note_output_fallback's docstring below),
+# so this spans at least two ticks — a single missed enumeration right after
+# boot (a TV still waking from standby, hotplug settling) must not trigger
+# the fallback on its own, only a sink that stays absent across several
+# ticks in a row. Long enough to ride out that startup settling window,
+# short enough that a genuinely unplugged/off display doesn't leave the
+# Output channel silently dead for an uncomfortable amount of time (#246).
+_OUTPUT_FALLBACK_GRACE_S = 10.0
+
+# Monotonic timestamp of the first tick where the configured external sink
+# was found configured-but-absent from the graph, or None while it is
+# present or has never been seen absent yet. Reset to None the moment the
+# sink reappears (see the "present" branch in ensure_physical_output_links)
+# so the grace window always restarts fresh from the first real absence,
+# rather than being stretched indefinitely by intermittent presence.
+# Deliberately separate from _output_fallback_active above, which only
+# dedupes the log line — this drives whether the fallback link is attempted
+# at all.
+_output_absent_since: float | None = None
 
 
 def _note_output_fallback(absent_target: str | None) -> None:
@@ -3899,7 +3930,11 @@ def ensure_physical_output_links(
         — only hops whose target is currently known (device attached / external
         sink configured) are included at all.
     """
+    import time
+
     from arctis_sound_manager.pw_utils import ensure_loopback_link
+
+    global _output_absent_since
 
     skip_targets = skip_targets or set()
     results: dict[str, bool] = {}
@@ -3951,27 +3986,44 @@ def ensure_physical_output_links(
         # have the watchdog retry with a fresh pw-dump every tick and escalate
         # on a situation that is not a fault at all.
         _note_output_fallback(None)
+        _output_absent_since = None
         results["output"] = ensure_loopback_link(
             _OUTPUT_EQ_OUTPUT_NAME, output_target, data=data
         )
     elif output_target:
         # The configured sink is gone — the monitor is off, the Bluetooth
-        # speaker walked away, the dock was unplugged. Skipping the hop left
-        # everything routed to the Output channel playing into a dead end,
+        # speaker walked away, the dock was unplugged, OR it simply hasn't
+        # enumerated yet (right after boot, a TV waking from standby). Those
+        # two cases are indistinguishable on the very first tick, so give the
+        # sink _OUTPUT_FALLBACK_GRACE_S to show up before ever considering the
+        # headset a stand-in (#246): Output stays silent/unlinked during the
+        # grace window rather than transiently blasting through the headset
+        # and switching a few seconds later once the real device settles.
+        # Combined with Output owning its EQ link (generate_sonar_eq_conf's
+        # owns_link) there is no WirePlumber autoconnect to fall back on
+        # either, so "do nothing this tick" really does mean silence.
+        #
+        # Once the grace period elapses, the pre-existing SD-1 safety net
+        # below still applies for a genuinely absent device: skipping the hop
+        # forever left everything routed to Output playing into a dead end,
         # silently and indefinitely, whenever the tray GUI was not running to
-        # do the fallback itself (SD-1). Game/Chat/Media never had that gap:
+        # do the fallback itself. Game/Chat/Media never had that gap:
         # channel_destination() falls back to the headset the moment the saved
         # device is absent, re-evaluated on every tick.
         #
         # The setting is deliberately NOT rewritten: the user's choice stays
         # the user's, so the channel returns to the external sink on its own as
         # soon as it comes back. This is a link-level fallback, not a decision.
-        fallback = _get_physical_out_game()
-        if fallback and fallback not in skip_targets and _node_in_graph(data, fallback):
-            _note_output_fallback(output_target)
-            results["output"] = ensure_loopback_link(
-                _OUTPUT_EQ_OUTPUT_NAME, fallback, data=data
-            )
+        now = time.monotonic()
+        if _output_absent_since is None:
+            _output_absent_since = now
+        elif now - _output_absent_since >= _OUTPUT_FALLBACK_GRACE_S:
+            fallback = _get_physical_out_game()
+            if fallback and fallback not in skip_targets and _node_in_graph(data, fallback):
+                _note_output_fallback(output_target)
+                results["output"] = ensure_loopback_link(
+                    _OUTPUT_EQ_OUTPUT_NAME, fallback, data=data
+                )
 
     return results
 
