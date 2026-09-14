@@ -142,6 +142,49 @@ def test_set_setting_accepts_catalogue_hrir_id(tmp_path):
     apply_hrir.assert_called_once_with("ssc_hu")
 
 
+# ── aux_enabled has no ConfigSetting entry either (its own GUI button, not a
+# generic widget) — it must be special-cased like hrir_id/weather keys above
+# it, or it falls into the generic `general_settings_keys` branch, finds no
+# ConfigSetting, and always returns False without writing or reconfiguring. ──
+
+class _ImmediateThread:
+    """Runs the target synchronously instead of spawning a real OS thread, so
+    the test can assert on it deterministically (same helper as
+    tests/test_preferred_device.py)."""
+
+    def __init__(self, target=None, name=None, daemon=None, args=(), kwargs=None):
+        self._target = target
+        self._args = args
+        self._kwargs = kwargs or {}
+
+    def start(self):
+        self._target(*self._args, **self._kwargs)
+
+
+def test_set_setting_aux_enabled_persists_and_reconfigures(tmp_path, caplog):
+    svc = _make_service(tmp_path)
+    with patch("arctis_sound_manager.settings.SETTINGS_FOLDER", tmp_path), \
+         patch("arctis_sound_manager.dbus_service.threading.Thread", _ImmediateThread), \
+         caplog.at_level(logging.ERROR):
+        ok = _set_setting(svc, "aux_enabled", json.dumps(True))
+
+    assert ok is True
+    assert svc.core_engine.general_settings.aux_enabled is True
+    svc.core_engine.configure_virtual_sinks.assert_called_once()
+    assert "Unknown general setting configuration" not in caplog.text
+
+
+def test_set_setting_aux_enabled_rejects_non_bool(tmp_path):
+    svc = _make_service(tmp_path)
+    with patch("arctis_sound_manager.settings.SETTINGS_FOLDER", tmp_path), \
+         patch("arctis_sound_manager.dbus_service.threading.Thread", _ImmediateThread):
+        ok = _set_setting(svc, "aux_enabled", json.dumps("yes"))
+
+    assert ok is False
+    assert svc.core_engine.general_settings.aux_enabled is False
+    svc.core_engine.configure_virtual_sinks.assert_not_called()
+
+
 # ── #180: pm_shutdown links headset_idle_off_minutes on the same slider ─────
 #
 # Every device profile that declares pm_shutdown uses its own raw domain (a
