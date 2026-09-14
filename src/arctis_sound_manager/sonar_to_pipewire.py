@@ -1455,7 +1455,12 @@ def generate_sonar_eq_conf(
         raise ValueError(
             f"channel must be 'game', 'chat', 'media', 'aux' or 'output', got {channel!r}")
 
-    owns_link = channel in spatial_channels()
+    # Chat also owns its link (issue #242): it targets the native mono chat
+    # PCM by default, and without node.autoconnect=false PipeWire locks the
+    # node's negotiated format to that 1-channel target at load time — so a
+    # later runtime relink to a user-chosen external stereo device only has
+    # one source channel to connect, playing mono/left-only.
+    owns_link = channel in spatial_channels() or channel == "chat"
     sink_name = f"effect_input.sonar-{channel}-eq"
 
     # Only a conf written to the channel's real path represents the live EQ;
@@ -1549,7 +1554,7 @@ def generate_sonar_eq_conf(
     else:
         text = _active_conf_2ch(channel, sink_name, target, position,
                                 all_filters, band_slots, macro_bands,
-                                boost_db, smart_volume)
+                                boost_db, smart_volume, owns_link=owns_link)
 
     _write_conf(output_path, text)
     if writes_live_conf:
@@ -1686,6 +1691,7 @@ def _active_conf_2ch(
     macro_bands: list[tuple[str, EqBand]],
     boost_db: float,
     smart_volume: dict | None = None,
+    owns_link: bool = False,
 ) -> str:
     """2ch config: L/R filter pairs with explicit inputs/outputs."""
     node_lines: list[str] = []
@@ -1750,6 +1756,12 @@ def _active_conf_2ch(
         f'        node.target         = "{target}"\n'
         f'        target.object       = "{target}"\n'
     ) if target else ''
+    # See _active_conf_8ch's comment on this same pattern (issue #100/#88,
+    # extended to chat by issue #242).
+    _autoconnect_line = (
+        '        node.autoconnect     = false\n'
+        '        state.restore-target = false\n'
+    ) if owns_link else ''
 
     # The Output channel is the one users route applications *to* from any
     # mixer, so its sink must be visible to PulseAudio clients; every other
@@ -1799,7 +1811,7 @@ context.modules = [
       }}
       playback.props = {{
         node.name           = "effect_output.sonar-{channel}-eq"
-{_target_line}        node.dont-fallback  = true
+{_target_line}{_autoconnect_line}        node.dont-fallback  = true
         node.linger         = true
 {_pause_on_idle_line}        audio.channels      = 2
         audio.position      = [ {position} ]
@@ -2209,7 +2221,7 @@ context.modules = [
       }}
       playback.props = {{
         node.name           = "{sink_name.replace('effect_input.', 'effect_output.')}"
-{_target_line}        node.dont-fallback  = true
+{_target_line}{_autoconnect_line}        node.dont-fallback  = true
         node.linger         = true
         audio.channels      = 2
         audio.position      = [ {position} ]
@@ -3158,7 +3170,7 @@ def check_and_fix_stale_configs() -> tuple[bool, bool]:
                 position = _CHANNEL_POSITION.get(channel, "FL FR")
                 _regenerate_eq_conf(
                     channel, path, sink_name, target, channels, position,
-                    owns_link=channel in spatial_channels(), log=log,
+                    owns_link=channel in spatial_channels() or channel == "chat", log=log,
                     reason=regen_reason,
                 )
                 fixed = True
@@ -3563,7 +3575,7 @@ def ensure_sonar_eq_configs() -> bool:
             _regenerate_eq_conf(
                 channel, conf_path, sink_name, exp["target"],
                 exp["channels"], exp["position"],
-                owns_link=channel in spatial_channels(), log=log,
+                owns_link=channel in spatial_channels() or channel == "chat", log=log,
                 reason=regen_reason,
             )
             generated = True
