@@ -542,6 +542,26 @@ class ArctisManagerDbusSettingsService(ServiceInterface):
             ).start()
             return True
 
+        # Special case: ChatMix extra channels (#249, no ConfigSetting entry —
+        # the GUI toggles this from a per-card checkbox, not the generic
+        # settings_config widget system). Only affects the next
+        # manage_mix_change() tick — no virtual sinks to rebuild, unlike
+        # aux_enabled above.
+        if setting == 'chatmix_extra_channels':
+            gs = self.core_engine.general_settings
+            valid_members = {'media', 'aux'}
+            if not isinstance(value, list) or not all(
+                isinstance(v, str) and v in valid_members for v in value
+            ):
+                self.logger.error(
+                    'SetSetting chatmix_extra_channels: expected a list of '
+                    "'media'/'aux', got %r", value,
+                )
+                return False
+            gs.chatmix_extra_channels = value
+            gs.write_to_file()
+            return True
+
         general_settings_keys = self.core_engine.general_settings.to_dict().keys()
         if setting in general_settings_keys:
             gs = self.core_engine.general_settings

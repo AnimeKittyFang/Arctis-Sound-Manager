@@ -185,6 +185,48 @@ def test_set_setting_aux_enabled_rejects_non_bool(tmp_path):
     svc.core_engine.configure_virtual_sinks.assert_not_called()
 
 
+# ── chatmix_extra_channels has no ConfigSetting entry either (#249, its own
+# per-card checkbox, not a generic widget) — special-cased the same way.
+# Unlike aux_enabled, nothing needs reconfiguring: the next
+# manage_mix_change() tick reads it fresh via PulseAudioManager.set_mix. ──
+
+def test_set_setting_chatmix_extra_channels_persists(tmp_path):
+    svc = _make_service(tmp_path)
+    with patch("arctis_sound_manager.settings.SETTINGS_FOLDER", tmp_path):
+        ok = _set_setting(svc, "chatmix_extra_channels", json.dumps(["media", "aux"]))
+
+    assert ok is True
+    assert svc.core_engine.general_settings.chatmix_extra_channels == ["media", "aux"]
+
+
+def test_set_setting_chatmix_extra_channels_rejects_game_or_chat(tmp_path):
+    """Game and Chat are the dial's fixed, always-on sides — never configurable."""
+    svc = _make_service(tmp_path)
+    with patch("arctis_sound_manager.settings.SETTINGS_FOLDER", tmp_path):
+        ok = _set_setting(svc, "chatmix_extra_channels", json.dumps(["media", "game"]))
+
+    assert ok is False
+    assert svc.core_engine.general_settings.chatmix_extra_channels == []
+
+
+def test_set_setting_chatmix_extra_channels_rejects_non_list(tmp_path):
+    svc = _make_service(tmp_path)
+    with patch("arctis_sound_manager.settings.SETTINGS_FOLDER", tmp_path):
+        ok = _set_setting(svc, "chatmix_extra_channels", json.dumps("media"))
+
+    assert ok is False
+    assert svc.core_engine.general_settings.chatmix_extra_channels == []
+
+
+def test_set_setting_chatmix_extra_channels_rejects_garbage_entry(tmp_path):
+    svc = _make_service(tmp_path)
+    with patch("arctis_sound_manager.settings.SETTINGS_FOLDER", tmp_path):
+        ok = _set_setting(svc, "chatmix_extra_channels", json.dumps(["media", 42]))
+
+    assert ok is False
+    assert svc.core_engine.general_settings.chatmix_extra_channels == []
+
+
 # ── #180: pm_shutdown links headset_idle_off_minutes on the same slider ─────
 #
 # Every device profile that declares pm_shutdown uses its own raw domain (a
