@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The daemon froze on wake from suspend (1.4.25 regression, #238).** Two
+  threads deadlocked on every resume where the headset re-enumerates, which
+  on the Nova Pro Omni is every resume: the pyudev thread, reacting to the
+  re-enumeration, was inside device detection holding the detection lock and
+  waiting for the device lock; the event-loop thread, in the new
+  `resume_from_sleep`, was blocking on the detection lock. The device lock was
+  owned by the listen loop, which had awaited its idle back-off *inside* the
+  lock and could not be resumed because the loop thread was blocked. Nothing
+  logged, D-Bus went silent, the ChatMix knob stayed dead, and `systemctl
+  restart` hung for the full stop timeout because a blocked main thread
+  cannot run the SIGTERM handler. The listen loop now sleeps outside the lock,
+  and the resume and USB-reset paths run detection off the event loop,
+  deferring to a detection already in flight rather than queueing a second
+  one. Diagnosed from a py-spy dump of the hung process.
+
 ## [1.4.25] - 13 September 2026
 
 ### Fixed
