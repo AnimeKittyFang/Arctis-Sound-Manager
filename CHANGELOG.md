@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.4.26] - 14 September 2026
 
 ### Fixed
 
@@ -25,6 +25,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one. Diagnosed from a py-spy dump of the hung process. Contributed by
   @kevinpbaker. (#238)
 - Chat channel routed to an external output device now stays stereo instead of collapsing to mono/left-only, since ASM now owns its link (PipeWire no longer force-negotiates the chat EQ output to the headset's native mono PCM format). (#242)
+- **Turning the Aux channel off (or back on) never actually told the daemon.**
+  The toggle saved `aux_enabled` to disk correctly, but `SetSetting` looked
+  it up in the settings-widget registry — the generic dropdown/slider table,
+  which Aux was never part of since it has its own dedicated toggle button —
+  found no match, logged "Unknown general setting configuration:
+  aux_enabled", and returned before ever reaching the block of code that
+  reconfigures the virtual sinks, which was unreachable dead code as a
+  result. `aux_enabled` is now special-cased ahead of that generic lookup,
+  the same way a couple of other settings already needed to be.
+- **ASM's own internal PipeWire nodes (the filter-chain/loopback plumbing
+  behind each channel) could show up in the mixer's per-channel application
+  list as if a real app had been dropped there** — most visibly after a
+  brief internal routing hiccup left one of them momentarily linked to a
+  channel's virtual sink. They're now excluded from that list.
+- The system tray's Output Routing menu never listed the Aux channel at all, even when it was switched on — the per-channel device picker there was hardcoded to Game/Chat/Media. Aux now appears whenever the channel is enabled.
+- **The Output channel could briefly play through the headset at startup
+  instead of the configured external device.** Its EQ node never disabled
+  PipeWire's own default-sink autoconnect, so a device that hadn't
+  enumerated yet at boot (a TV still waking from standby, typically) left
+  WirePlumber free to route it to whatever the system's default sink was —
+  the headset — before ASM's watchdog got a say; the watchdog's own "device
+  is genuinely gone" fallback then fired just as eagerly, unable to tell
+  "still settling" from "switched off". Output now owns its link like
+  Game/Chat/Media, and the fallback to the headset only engages once the
+  configured device has stayed absent for a few watchdog ticks, so a device
+  that's merely slow to enumerate now stays silent and links straight to it
+  once found instead of audibly detouring through the headset first. (#246)
+
+### Added
+
+- **The headset's physical ChatMix knob has always crossfaded exactly two
+  things: Game's volume on one side, Chat's on the other.** Media and Aux
+  were never part of it, no matter what. Media and Aux can now each be
+  switched on to ride along with the knob's non-chat side too, from a
+  toggle on their mixer card (hidden unless the channel itself is enabled,
+  for Aux). Game and Chat are unaffected and remain the knob's fixed,
+  non-configurable sides. (#249)
 
 ## [1.4.25] - 13 September 2026
 
