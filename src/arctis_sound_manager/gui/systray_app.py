@@ -832,6 +832,25 @@ class QSystrayApp(QBaseDesktopApp):
         app.main_window.raise_()
         app.main_window.activateWindow()
 
+    def restart_on_new_code(self, reason: str) -> None:
+        """Replace this process with one running the code now on disk.
+
+        Reached from the package scriptlet knocking on the single-instance
+        socket (`asm-gui --restart`). The window, when it was built, has
+        things to release before the exec (the capture's portal session, the
+        encoder) and knows how — hand it over. A tray whose window was never
+        opened has nothing of the sort and restarts directly: that is the
+        common case, and calling the window's method on the tray there is
+        what crashed every tray on the 1.4.28 upgrade (#277).
+        """
+        main_app = getattr(self, '_main_app', None)
+        if main_app is not None:
+            main_app.restart_on_new_code(reason)
+            return
+        self.logger.info("%s — restarting on the new code", reason)
+        from arctis_sound_manager.runtime_staleness import restart_gui
+        restart_gui()
+
     def import_preset_url(self, url: str) -> None:
         """Handle an arctis-asm:// deep link — dispatch to the preset or theme import flow."""
         from arctis_sound_manager.gui.theme_share import is_theme_link
