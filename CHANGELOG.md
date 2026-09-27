@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.30] - 27 September 2026
+
+### Added
+
+- **Applications are shown as icons under each channel slider**, centred
+  and wrapping, instead of their names. Icons come from the stream itself
+  or from the installed `.desktop` files (Proton games match their Steam
+  shortcut); an app without one gets its initial. Hover for the name, click
+  to move the app to another channel.
+- **A redesigned, fully themed mixer.** Sliders and the ChatMix bar use
+  fader caps; toggles, dropdowns, checkboxes and button groups follow the
+  theme colors, and channel icons are recolored when the theme changes.
+  New built-in theme: Matcha SV.
+- The EQ preset and output device pickers on each channel card open a
+  searchable list. Device settings are grouped into panels.
+
+### Fixed
+
+- Native Linux Steam games (Team Fortress 2, for example) landed on Media
+  instead of Game: only Proton/Wine games were recognized. Every game
+  launched by Steam now goes to Game by default. (#265)
+- After an upgrade, a crash of the previous version was reported again
+  under the new version number. A crash report is now tagged with the
+  version that crashed, and reports from an older version are discarded.
+  (#284, #285)
+
 ## [1.4.29] - 27 September 2026
 
 ### Added
