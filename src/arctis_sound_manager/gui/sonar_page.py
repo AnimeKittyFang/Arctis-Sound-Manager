@@ -3732,6 +3732,7 @@ class SonarPage(QWidget):
         widget_map = {
             "game":   self._game_widget,
             "media":  self._media_widget,
+            "aux":    self._aux_widget,
             "chat":   self._chat_widget,
             "output": self._output_widget,
         }

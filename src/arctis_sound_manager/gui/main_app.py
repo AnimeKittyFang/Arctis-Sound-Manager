@@ -162,6 +162,10 @@ class QMainApp(QBaseDesktopApp):
         self._home_page.profile_bar.sig_apply.connect(self._on_apply_profile)
         self._home_page.profile_bar.sig_changed.connect(self._on_profiles_changed)
 
+        # A preset picked on a Channels card: show it on the Equalizer page too
+        self._home_page.sig_eq_preset_applied.connect(
+            self._equalizer_page._sonar_page.notify_external_preset_change)
+
         self.destroyed.connect(self.sig_stop)
         self.main_window.visibilityChanged.connect(self._on_visibility_changed)
 

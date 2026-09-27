@@ -9,10 +9,11 @@ import json
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QUrl, Slot
+from PySide6.QtCore import Qt, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -96,6 +97,10 @@ from arctis_sound_manager.constants import (PULSE_AUX_NODE_NAME,
                                             PULSE_CHAT_NODE_NAME,
                                             PULSE_GAME_NODE_NAME,
                                             PULSE_MEDIA_NODE_NAME)
+from arctis_sound_manager.gui.tray_eq_presets import (SonarPresetApplier,
+                                                      current_eq_mode,
+                                                      get_sonar_active_preset,
+                                                      list_sonar_channel_presets)
 from arctis_sound_manager.i18n import I18n
 from arctis_sound_manager.power_status import HeadsetPower, normalize_power_value
 from arctis_sound_manager.pw_utils import (
@@ -473,6 +478,19 @@ class AudioCard(QWidget):
 
         outer.addWidget(top_widget, stretch=1)
 
+        # Optional EQ preset picker (the channel's favorites from the Equalizer
+        # page), hidden until set_presets() is called (#256).
+        self._preset_combo = QComboBox()
+        self._preset_combo.setToolTip(I18n.translate("ui", "channel_eq_preset_hint"))
+        self._preset_combo.activated.connect(self._on_preset_activated)
+        self._preset_combo.hide()
+        # What the combo currently lists, so a poll that would draw the same
+        # thing leaves it alone (and never closes an open popup).
+        self._preset_sig: tuple | None = None
+        self._on_preset_callback = None
+        outer.addWidget(self._preset_combo)
+        outer.setAlignment(self._preset_combo, Qt.AlignmentFlag.AlignHCenter)
+
         outer.addSpacing(8)
 
         # ── Applications section ───────────────────────────────────────────────
@@ -591,6 +609,47 @@ class AudioCard(QWidget):
         self._hw_slider.setValue(pct)
         self._hw_pct_label.setText(f"{pct}%")
         self._hw_gauge_widget.show()
+
+    def set_on_preset(self, callback):
+        self._on_preset_callback = callback
+
+    def set_presets(self, names: list[str] | None, active: str = ""):
+        """List *names* in the preset picker with *active* selected, or hide
+        the picker when *names* is None (EQ not in Sonar mode).
+
+        The active preset is listed even when it isn't a favorite, so the
+        picker always shows what is really applied."""
+        if names is None:
+            self._preset_sig = None
+            self._preset_combo.hide()
+            return
+        items = list(names)
+        if active and active not in items:
+            items.insert(0, active)
+        sig = (tuple(items), active)
+        if sig != self._preset_sig:
+            self._preset_sig = sig
+            self._preset_combo.blockSignals(True)
+            self._preset_combo.clear()
+            if items:
+                self._preset_combo.addItems(items)
+                self._preset_combo.setCurrentIndex(items.index(active) if active in items else -1)
+            else:
+                self._preset_combo.addItem(I18n.translate("ui", "no_presets_saved"))
+            self._preset_combo.setEnabled(bool(items))
+            self._preset_combo.blockSignals(False)
+        self._preset_combo.show()
+
+    def set_preset_busy(self, busy: bool):
+        """Lock the picker while a preset is being applied."""
+        self._preset_combo.setEnabled(not busy and bool(self._preset_sig and self._preset_sig[0]))
+
+    def _on_preset_activated(self, index: int):
+        name = self._preset_combo.itemText(index)
+        if not self._preset_sig or name == self._preset_sig[1]:
+            return
+        if self._on_preset_callback:
+            self._on_preset_callback(name)
 
     def set_disconnected(self):
         self._ignore_change = True
@@ -966,6 +1025,10 @@ class HomePage(QWidget):
     - Row of audio cards (Game, Chat, Media, …)
     """
 
+    # (channel, preset name) once a preset picked on a card has been applied,
+    # so the Equalizer page can show it without applying it a second time.
+    sig_eq_preset_applied = Signal(str, str)
+
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setStyleSheet(f"background-color: {BG_MAIN};")
@@ -1166,6 +1229,21 @@ class HomePage(QWidget):
         self._ext_card = AudioCard(I18n.translate("ui", "output"), _theme.c("COLOR_HDMI"), HDMI_ICON)
         self._ext_card.set_on_change(self._on_ext_volume_changed)
         self._cards_layout.addWidget(self._ext_card, stretch=1)
+
+        # EQ preset picker on every card but Master, keyed by Sonar channel
+        # (#256). One applier per channel, so picking on one card never gets
+        # dropped because another card's preset is still being applied.
+        self._preset_cards: dict[str, AudioCard] = {
+            "game": self._game_card, "chat": self._chat_card,
+            "media": self._media_card, "aux": self._aux_card,
+            "output": self._ext_card,
+        }
+        self._preset_appliers: dict[str, SonarPresetApplier] = {}
+        for channel, card in self._preset_cards.items():
+            applier = SonarPresetApplier(self)
+            applier.done.connect(self._on_eq_preset_applied)
+            self._preset_appliers[channel] = applier
+            card.set_on_preset(lambda name, ch=channel: self._on_eq_preset_chosen(ch, name))
 
         cards_outer_layout.addWidget(self._cards_widget, stretch=6)
         cards_outer_layout.addStretch(1)
@@ -1967,6 +2045,7 @@ class HomePage(QWidget):
 
     @Slot()
     def _poll_volumes(self):
+        self._refresh_eq_presets()
         pulse = self._get_pulse()
         if pulse is None:
             self._set_disconnected()
@@ -2392,6 +2471,42 @@ class HomePage(QWidget):
             per_card.setdefault(id(card), []).append(
                 (s["app_name"], s["id"], int(s["pid"] or 0)))
         return per_card
+
+    def _refresh_eq_presets(self):
+        """Follow the Equalizer page: favorites and active preset per channel.
+
+        Read from the files the Equalizer page writes, so a change made there
+        or from the tray shows up here too. Cards only redraw on a change."""
+        sonar = current_eq_mode() == "sonar"
+        for channel, card in self._preset_cards.items():
+            if not sonar:
+                card.set_presets(None)
+                continue
+            if self._preset_appliers[channel].is_running():
+                continue
+            card.set_presets(
+                list_sonar_channel_presets(channel, limit=None),
+                # No active-preset file yet means Flat, as on the Equalizer page.
+                get_sonar_active_preset(channel) or "Flat",
+            )
+
+    def _on_eq_preset_chosen(self, channel: str, name: str):
+        applier = self._preset_appliers[channel]
+        if applier.is_running():
+            return
+        self._preset_cards[channel].set_preset_busy(True)
+        applier.apply(channel, name)
+
+    @Slot(bool, str, str)
+    def _on_eq_preset_applied(self, ok: bool, channel: str, name: str):
+        card = self._preset_cards.get(channel)
+        if card is not None:
+            card.set_preset_busy(False)
+        if not ok:
+            logger.warning("EQ preset %r failed to apply on %s", name, channel)
+        self._refresh_eq_presets()
+        if ok:
+            self.sig_eq_preset_applied.emit(channel, name)
 
     def _set_disconnected(self):
         if self._connected:

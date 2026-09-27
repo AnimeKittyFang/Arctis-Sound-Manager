@@ -45,12 +45,13 @@ def list_custom_presets() -> list[str]:
         return []
 
 
-def list_sonar_channel_presets(channel: str) -> list[str]:
-    """Return favorite preset names for one Sonar channel, capped at _MAX_PRESETS."""
+def list_sonar_channel_presets(channel: str, limit: int | None = _MAX_PRESETS) -> list[str]:
+    """Return favorite preset names for one Sonar channel, capped at *limit*
+    (None: all of them)."""
     fav_file = _CFG / f".sonar_favorites_{channel}.json"
     try:
         names: list[str] = json.loads(fav_file.read_text())
-        return [n for n in names if n][:_MAX_PRESETS]
+        return [n for n in names if n][:limit]
     except Exception:
         return []
 
