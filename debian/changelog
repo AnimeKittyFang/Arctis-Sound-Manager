@@ -1,3 +1,13 @@
+arctis-sound-manager (1.4.30-1) noble; urgency=medium
+
+  * Applications are shown as icons under each channel slider, centred
+  * A redesigned, fully themed mixer. Sliders and the ChatMix bar use
+  * The EQ preset and output device pickers on each channel card open a
+  * Native Linux Steam games (Team Fortress 2, for example) landed on Media
+  * After an upgrade, a crash of the previous version was reported again
+
+ -- loteran <axel.valadon@gmail.com>  Sun, 27 Sep 2026 00:00:00 +0000
+
 arctis-sound-manager (1.4.29-1) noble; urgency=medium
 
   * An EQ preset picker on each Channels card. Game, Chat, Media, Aux
