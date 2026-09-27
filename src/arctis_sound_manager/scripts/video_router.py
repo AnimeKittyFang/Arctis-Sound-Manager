@@ -8,6 +8,7 @@ Respects manual overrides written by the GUI (routing_overrides.json).
 Detects manual moves done in KDE and saves them as persistent overrides.
 """
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -182,6 +183,29 @@ _CHAT_APPS = {"WEBRTC VoiceEngine", "Discord", "TeamSpeak", "Mumble",
               "Element", "Signal"}
 
 
+@functools.lru_cache(maxsize=256)
+def _pid_launched_by_steam(pid: str) -> bool:
+    """True if process *pid* was started by Steam as a game.
+
+    Steam sets SteamGameId in the environment of everything it launches,
+    native or Proton, and of non-Steam shortcuts too; the client itself does
+    not carry it. That covers native Linux games such as TF2 (tf_linux64),
+    which _GAME_BINARIES cannot know and which used to land on the default
+    channel (Media) every time (discussion #265). Cached per pid: the answer
+    cannot change for a running process.
+    """
+    try:
+        with open(f"/proc/{int(pid)}/environ", "rb") as f:
+            env = f.read().split(b"\0")
+    except (OSError, ValueError):
+        return False
+    for entry in env:
+        if entry.startswith(b"SteamGameId="):
+            value = entry.partition(b"=")[2].strip()
+            return bool(value) and value != b"0"
+    return False
+
+
 def _auto_route(app: str, proplist: dict) -> str | None:
     """Return an Arctis sink name for an app based on heuristics, or None."""
     binary = proplist.get("application.process.binary", "")
@@ -191,6 +215,11 @@ def _auto_route(app: str, proplist: dict) -> str | None:
         return "Arctis_Media"
     if app in _CHAT_APPS:
         return "Arctis_Chat"
+    # After the browser/chat names, so a browser or Discord started from
+    # Steam keeps its own channel.
+    pid = proplist.get("pipewire.sec.pid") or proplist.get("application.process.id")
+    if pid and _pid_launched_by_steam(str(pid)):
+        return "Arctis_Game"
     return None
 
 # Tracks where the router last placed each app (PA sink index), keyed by

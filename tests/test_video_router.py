@@ -51,6 +51,43 @@ def test_auto_route_unknown_returns_none():
     assert _auto_route("SomeRandomApp", {}) is None
 
 
+def _fake_environ(tmp_path, monkeypatch, content: bytes) -> str:
+    """Point /proc/<pid>/environ reads at a file holding *content*."""
+    import builtins
+    from arctis_sound_manager.scripts import video_router
+    video_router._pid_launched_by_steam.cache_clear()
+    env = tmp_path / "environ"
+    env.write_bytes(content)
+    real_open = builtins.open
+    monkeypatch.setattr(
+        builtins, "open",
+        lambda path, *a, **k: real_open(env if str(path) == "/proc/4242/environ" else path, *a, **k))
+    return "4242"
+
+
+def test_auto_route_native_steam_game_to_game(tmp_path, monkeypatch):
+    # Discussion #265: TF2 is a native Linux game, no Wine binary to go by.
+    pid = _fake_environ(tmp_path, monkeypatch, b"HOME=/home/u\0SteamGameId=440\0SteamAppId=440\0")
+    assert _auto_route("Team Fortress 2", {
+        "application.process.binary": "tf_linux64",
+        "application.process.id": pid,
+    }) == "Arctis_Game"
+
+
+def test_auto_route_process_not_from_steam_is_untouched(tmp_path, monkeypatch):
+    pid = _fake_environ(tmp_path, monkeypatch, b"HOME=/home/u\0SteamGameId=0\0")
+    assert _auto_route("SomeRandomApp", {"application.process.id": pid}) is None
+
+
+def test_auto_route_browser_from_steam_keeps_media(tmp_path, monkeypatch):
+    pid = _fake_environ(tmp_path, monkeypatch, b"SteamGameId=440\0")
+    assert _auto_route("Firefox", {"application.process.id": pid}) == "Arctis_Media"
+
+
+def test_auto_route_unreadable_pid_returns_none():
+    assert _auto_route("SomeRandomApp", {"application.process.id": "not-a-pid"}) is None
+
+
 def test_load_overrides_missing_file():
     with patch("arctis_sound_manager.scripts.video_router.OVERRIDES_FILE", Path("/nonexistent/path.json")):
         assert load_overrides() == {}
