@@ -1,6 +1,6 @@
 {
-  "version": "119.0.0",
-  "checked_at": "2026-09-13T13:54:54.574382+00:00",
+  "version": "120.0.0",
+  "checked_at": "2026-09-27T00:17:06.546667+00:00",
   "edevice_files": [
     "ae2-150.edevice",
     "aeon_pro_controller.edevice",
@@ -622,10 +622,10 @@
     "standard-boilerplate.device": "b77dcaf72a1d3e9898a6811ca846c9b750a0515aeaf826d819208fca9993cf0b"
   },
   "presets_added": [
-    "Bombanana! [Game].json",
-    "Mortal Shell II [Game].json",
-    "The Sinking City 2 [Game].json",
-    "Tukoni_ Forest Keepers [Game].json"
+    "Big Walk [Game].json",
+    "Onimusha_ Way of the Sword [Game].json",
+    "Shift At Midnight [Game].json",
+    "The Blood of Dawnwalker [Game].json"
   ],
   "new_files": [],
   "changed_specs": [],
