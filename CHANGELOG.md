@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.29] - 27 September 2026
+
+### Added
+
+- **An EQ preset picker on each Channels card.** Game, Chat, Media, Aux
+  and Output each get a dropdown under their slider listing the favorites
+  saved for that channel on the Equalizer page; picking one applies it
+  right away, as GG's own mixer does. (#256)
+- **A read-only "DAC wheel" gauge on the Master card**, next to its
+  slider, showing where the GameDAC wheel sits. Nova Pro bases report it
+  from the moment the daemon starts, not only once the wheel is turned.
+  (#268)
+- Four new Sonar game presets from SteelSeries GG 120.0.0.
+
+### Fixed
+
+- Nova Pro Wireless volume had to be turned up about twice as far as
+  before 1.4.27: the GameDAC wheel, which already attenuates in hardware,
+  was also copied onto the headset's PipeWire sink. The wheel is no longer
+  mirrored. If your Master slider was left below 100 %, set it back to
+  100 % once. (#268)
+- With Arctis GameBuds X plugged in next to another headset, the Game card
+  showed and set the GameBuds' volume and looked frozen, and the Master
+  card could pick the idle GameBuds. Channel sinks are now matched by
+  exact name. (#269)
+- The tray crashed when the package upgrade asked it to restart
+  (`asm-gui --restart`); it now restarts itself. (#277)
+- A tray whose window was never opened did not notice an upgrade and kept
+  running the previous version until the next reboot.
+
 ## [1.4.28] - 24 September 2026
 
 ### Added
