@@ -12,12 +12,14 @@ name: SteelSeries GG watcher
 # The back-merge workflow carries preset commits to develop.
 #
 # Trigger model:
-#   - schedule: weekly on Monday 09:23 UTC (off the hour to avoid rush)
+#   - schedule: daily at 09:23 UTC (off the hour to avoid rush). A run with
+#     no new GG version stops right after reading the latest version, so daily
+#     costs a minute of runner time; weekly left GG 120.0.0 unpicked for days.
 #   - workflow_dispatch: manual run with optional --since and --dry-run
 
 on:
   schedule:
-    - cron: '23 9 * * 1'
+    - cron: '23 9 * * *'
   workflow_dispatch:
     inputs:
       since:
