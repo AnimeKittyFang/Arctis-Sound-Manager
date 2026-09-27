@@ -428,7 +428,48 @@ class AudioCard(QWidget):
         self._slider.setMinimumHeight(140)
         self._slider.setStyleSheet(_make_vertical_slider_qss(accent_color))
         self._slider.valueChanged.connect(self._on_slider_changed)
-        top_layout.addWidget(self._slider, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        # The slider shares a row with an optional read-only gauge (the DAC
+        # wheel on the Master card), hidden until set_hw_gauge() gets a value.
+        sliders_row = QWidget()
+        sliders_row.setStyleSheet("background: transparent;")
+        sliders_layout = QHBoxLayout(sliders_row)
+        sliders_layout.setContentsMargins(0, 0, 0, 0)
+        sliders_layout.setSpacing(14)
+
+        self._hw_gauge_widget = QWidget()
+        self._hw_gauge_widget.setStyleSheet("background: transparent;")
+        hw_layout = QVBoxLayout(self._hw_gauge_widget)
+        hw_layout.setContentsMargins(0, 0, 0, 0)
+        hw_layout.setSpacing(4)
+        self._hw_pct_label = QLabel("—")
+        self._hw_pct_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self._hw_pct_label.setStyleSheet(
+            f"color: {_theme.c('TEXT_PRIMARY')}; font-size: 10pt; background: transparent;"
+        )
+        hw_layout.addWidget(self._hw_pct_label)
+        self._hw_slider = QSlider(Qt.Orientation.Vertical)
+        self._hw_slider.setMinimum(0)
+        self._hw_slider.setMaximum(100)
+        self._hw_slider.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        self._hw_slider.setFixedWidth(30)
+        self._hw_slider.setStyleSheet(_make_vertical_slider_qss(accent_color))
+        # Read-only: there is no command to move the wheel, only to read it.
+        # Transparent to the mouse rather than disabled, so it keeps its color.
+        self._hw_slider.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._hw_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        hw_layout.addWidget(self._hw_slider, stretch=1, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self._hw_caption = QLabel()
+        self._hw_caption.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self._hw_caption.setStyleSheet(
+            f"color: {_theme.c('TEXT_PRIMARY')}; font-size: 8pt; background: transparent;"
+        )
+        hw_layout.addWidget(self._hw_caption)
+        self._hw_gauge_widget.hide()
+        sliders_layout.addWidget(self._hw_gauge_widget)
+        sliders_layout.addWidget(self._slider)
+
+        top_layout.addWidget(sliders_row, stretch=1, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         outer.addWidget(top_widget, stretch=1)
 
@@ -496,9 +537,16 @@ class AudioCard(QWidget):
         self._apply_normal_style()
         # Slider groove color follows the theme; accent stays per-channel
         self._slider.setStyleSheet(_make_vertical_slider_qss(self._accent))
+        self._hw_slider.setStyleSheet(_make_vertical_slider_qss(self._accent))
         # Volume label text color
         self._pct_label.setStyleSheet(
             f"color: {_theme.c('TEXT_PRIMARY')}; font-size: 18pt; font-weight: bold; background: transparent;"
+        )
+        self._hw_pct_label.setStyleSheet(
+            f"color: {_theme.c('TEXT_PRIMARY')}; font-size: 10pt; background: transparent;"
+        )
+        self._hw_caption.setStyleSheet(
+            f"color: {_theme.c('TEXT_PRIMARY')}; font-size: 8pt; background: transparent;"
         )
         # Applications section background and title
         if hasattr(self, "_apps_widget"):
@@ -532,6 +580,17 @@ class AudioCard(QWidget):
         self._slider.setValue(pct)
         self._pct_label.setText(f"{pct}%")
         self._ignore_change = False
+
+    def set_hw_gauge(self, caption: str, pct: int | None):
+        """Show a read-only hardware reading beside the slider, or hide it
+        when *pct* is None (the device reports no such value)."""
+        if pct is None:
+            self._hw_gauge_widget.hide()
+            return
+        self._hw_caption.setText(caption)
+        self._hw_slider.setValue(pct)
+        self._hw_pct_label.setText(f"{pct}%")
+        self._hw_gauge_widget.show()
 
     def set_disconnected(self):
         self._ignore_change = True
@@ -1473,6 +1532,7 @@ class HomePage(QWidget):
         if not status:
             self._status_bar.set_no_device()
             self._headset_name_lbl.hide()
+            self._master_card.set_hw_gauge("", None)
             return
 
         headset = status.get("headset", {})
@@ -1499,6 +1559,14 @@ class HomePage(QWidget):
             headset_bat_val = None
 
         self._status_bar.update(power, headset_bat_val, dac_bat_val)
+
+        # The GameDAC wheel attenuates in the DAC itself, on top of Master.
+        # Shown beside Master for reference only, never applied to it (#268).
+        wheel = gamedac.get("station_volume", {})
+        self._master_card.set_hw_gauge(
+            I18n.translate("ui", "dac_wheel"),
+            wheel.get("value") if wheel.get("type") == "percentage" else None,
+        )
 
         if self._last_device_name:
             # Was `power == "offline"`, which only ever matched the Nova Pro

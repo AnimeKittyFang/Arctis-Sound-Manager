@@ -60,6 +60,12 @@ device:
       - starts_with: 0x0725
         station_volume: 0x02
 
+      # Reply to the [0x06, 0x20] audio_settings query sent at init: the wheel
+      # position on the same 0-56 scale as 0x0725, so it is known before the
+      # wheel is first turned (#268). Byte 2 is audio_input, not the volume.
+      - starts_with: 0x0620
+        station_volume: 0x03
+
       - starts_with: 0x0731
         eq_band_index: 0x02
         eq_band_value: 0x03

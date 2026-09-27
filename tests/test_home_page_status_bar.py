@@ -82,6 +82,16 @@ class _RecordingBar:
         self.calls.append(("no_device", None, None))
 
 
+class _RecordingMasterCard:
+    """Stands in for the Master AudioCard, capturing the DAC wheel gauge."""
+
+    def __init__(self):
+        self.gauge: tuple | None = None
+
+    def set_hw_gauge(self, caption, pct):
+        self.gauge = (caption, pct)
+
+
 def _run_update_status(status: dict) -> tuple:
     """Drive HomePage.update_status against stub widgets, return the bar call.
 
@@ -101,6 +111,7 @@ def _run_update_status(status: dict) -> tuple:
             setText=lambda *_: None, setStyleSheet=lambda *_: None,
         ),
         _last_device_name="",
+        _master_card=_RecordingMasterCard(),
     )
     HomePage.update_status(stub, status)
     return bar.calls[-1]
@@ -135,3 +146,50 @@ def test_battery_shown_for_unknown_power_vocabulary():
     """Nova Elite's 'standby' is UNKNOWN, not OFF: don't drop the reading."""
     _, headset_bat, _ = _run_update_status(_status("standby", 73))
     assert headset_bat == 73
+
+
+# ── DAC wheel gauge on the Master card (#268) ──────────────────────────────────
+
+def _gauge_for(status: dict):
+    from types import SimpleNamespace
+
+    from arctis_sound_manager.gui.home_page import HomePage
+
+    card = _RecordingMasterCard()
+    stub = SimpleNamespace(
+        _status_bar=_RecordingBar(),
+        _headset_name_lbl=SimpleNamespace(
+            hide=lambda: None, show=lambda: None,
+            setText=lambda *_: None, setStyleSheet=lambda *_: None,
+        ),
+        _last_device_name="",
+        _master_card=card,
+    )
+    HomePage.update_status(stub, status)
+    return card.gauge
+
+
+def test_dac_wheel_shown_on_master_card():
+    status = _status("online")
+    status["gamedac"] = {"station_volume": {"value": 40, "type": "percentage"}}
+    _, pct = _gauge_for(status)
+    assert pct == 40
+
+
+def test_dac_wheel_hidden_without_station_volume():
+    """Headsets without a GameDAC wheel must not get a dead gauge."""
+    _, pct = _gauge_for(_status("online"))
+    assert pct is None
+
+
+def test_dac_wheel_hidden_when_no_device():
+    _, pct = _gauge_for({})
+    assert pct is None
+
+
+def test_dac_wheel_never_written_to_a_sink():
+    """The wheel attenuates in the DAC; mirroring it into PipeWire attenuated
+    twice (#268). The daemon must not carry that sync any more."""
+    from arctis_sound_manager.core import CoreEngine
+
+    assert not hasattr(CoreEngine, "manage_station_volume_change")
