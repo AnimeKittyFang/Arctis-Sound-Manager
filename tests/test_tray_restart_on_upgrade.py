@@ -44,3 +44,23 @@ def test_tray_with_window_lets_the_window_restart(monkeypatch):
 
     main_app.restart_on_new_code.assert_called_once_with("asked to by the package upgrade")
     assert restarts == []
+
+
+def test_tray_notices_an_upgrade_without_a_window(monkeypatch):
+    """The staleness poll is the tray's: a tray whose window was never opened
+    used to run the previous version's code until the next reboot."""
+    monkeypatch.setattr(runtime_staleness, "upgraded_under_us", lambda: "9.9.9")
+    tray = MagicMock()
+
+    QSystrayApp._check_upgraded_under_us(tray)
+
+    tray.restart_on_new_code.assert_called_once_with("upgraded to 9.9.9")
+
+
+def test_tray_stays_put_when_nothing_was_upgraded(monkeypatch):
+    monkeypatch.setattr(runtime_staleness, "upgraded_under_us", lambda: None)
+    tray = MagicMock()
+
+    QSystrayApp._check_upgraded_under_us(tray)
+
+    tray.restart_on_new_code.assert_not_called()

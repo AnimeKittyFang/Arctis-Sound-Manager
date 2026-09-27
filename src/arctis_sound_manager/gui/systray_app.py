@@ -185,6 +185,18 @@ class QSystrayApp(QBaseDesktopApp):
         self.menu_setup()
         self.do_polling = False
 
+        # Watch for the package being upgraded underneath this process. Files
+        # on disk change during a `pacman -Syu`; this process keeps running the
+        # code it loaded at startup, and would otherwise go on doing so until
+        # the next reboot — reporting a version it is not executing. The poll
+        # lives here, not on the main window: the window is only built when
+        # someone opens it, and a tray that never had one never noticed an
+        # upgrade at all.
+        self._staleness_timer = QTimer(self)
+        self._staleness_timer.setInterval(60 * 1000)
+        self._staleness_timer.timeout.connect(self._check_upgraded_under_us)
+        self._staleness_timer.start()
+
         self.new_status.connect(self.on_new_status)
         self.dbus_poll_thread = Thread(target=self.poll_dbus_thread, daemon=True)
         self.dbus_poll_thread.start()
@@ -832,17 +844,29 @@ class QSystrayApp(QBaseDesktopApp):
         app.main_window.raise_()
         app.main_window.activateWindow()
 
+    def _check_upgraded_under_us(self) -> None:
+        """Restart on an upgrade that landed while this process was running."""
+        from arctis_sound_manager.runtime_staleness import upgraded_under_us
+        new_version = upgraded_under_us()
+        if not new_version:
+            return
+        self.restart_on_new_code(f"upgraded to {new_version}")
+
     def restart_on_new_code(self, reason: str) -> None:
         """Replace this process with one running the code now on disk.
 
-        Reached from the package scriptlet knocking on the single-instance
-        socket (`asm-gui --restart`). The window, when it was built, has
+        Reached from the staleness poll above and from the package scriptlet
+        knocking on the single-instance socket (`asm-gui --restart`). The poll
+        stops first: the answer cannot change back. The window, when it was built, has
         things to release before the exec (the capture's portal session, the
         encoder) and knows how — hand it over. A tray whose window was never
         opened has nothing of the sort and restarts directly: that is the
         common case, and calling the window's method on the tray there is
         what crashed every tray on the 1.4.28 upgrade (#277).
         """
+        timer = getattr(self, '_staleness_timer', None)
+        if timer is not None:
+            timer.stop()
         main_app = getattr(self, '_main_app', None)
         if main_app is not None:
             main_app.restart_on_new_code(reason)

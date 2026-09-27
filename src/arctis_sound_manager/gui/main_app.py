@@ -152,15 +152,6 @@ class QMainApp(QBaseDesktopApp):
         self._update_worker.start()
         self._device_page.sig_update_result.connect(self._home_page.on_update_available)
 
-        # Watch for the package being upgraded underneath this window. Files on
-        # disk change during a `pacman -Syu`; this process keeps running the
-        # code it loaded at startup, and would otherwise go on doing so until
-        # the next reboot — reporting a version it is not executing.
-        self._staleness_timer = QTimer(self)
-        self._staleness_timer.setInterval(60 * 1000)
-        self._staleness_timer.timeout.connect(self._check_upgraded_under_us)
-        self._staleness_timer.start()
-
         # Check for new/updated translation files (non-blocking)
         from arctis_sound_manager.lang_updater import LangUpdateWorker
         self._lang_worker = LangUpdateWorker()
@@ -507,19 +498,12 @@ class QMainApp(QBaseDesktopApp):
         if was_on_clips or wants_recorder:
             self._switch_page(PAGE_CLIPS)
 
-    def _check_upgraded_under_us(self) -> None:
-        """Surface an upgrade that landed while this window was open."""
-        from arctis_sound_manager.runtime_staleness import upgraded_under_us
-        new_version = upgraded_under_us()
-        if not new_version:
-            return
-        self.restart_on_new_code(f"upgraded to {new_version}")
-
     def restart_on_new_code(self, reason: str) -> None:
         """Replace this process with one running the code now on disk.
 
-        Reached from the staleness poll above and from the package scriptlet
-        knocking on the single-instance socket (`asm-gui --restart`). Restart
+        Reached through the tray (QSystrayApp.restart_on_new_code), from its
+        staleness poll or from the package scriptlet knocking on the
+        single-instance socket (`asm-gui --restart`). Restart
         whatever is open: the banner used to wait for a click, and a tray
         running yesterday's code next to daemons already on today's is
         exactly the half-upgraded state an upgrade exists to end — the
@@ -529,9 +513,6 @@ class QMainApp(QBaseDesktopApp):
         encoder — and come back on the code now on disk, same pid, same
         tray slot.
         """
-        # Stop polling: the answer cannot change back, and this restart is
-        # the only thing that matters now.
-        self._staleness_timer.stop()
         self.logger.info("%s — restarting on the new code", reason)
         shutdown = getattr(getattr(self, "_clips_page", None), "shutdown", None)
         if shutdown is not None:
