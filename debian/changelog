@@ -1,3 +1,15 @@
+arctis-sound-manager (1.4.29-1) noble; urgency=medium
+
+  * An EQ preset picker on each Channels card. Game, Chat, Media, Aux
+  * A read-only "DAC wheel" gauge on the Master card, next to its
+  * Four new Sonar game presets from SteelSeries GG 120.0.0.
+  * Nova Pro Wireless volume had to be turned up about twice as far as
+  * With Arctis GameBuds X plugged in next to another headset, the Game card
+  * The tray crashed when the package upgrade asked it to restart
+  * A tray whose window was never opened did not notice an upgrade and kept
+
+ -- loteran <axel.valadon@gmail.com>  Sun, 27 Sep 2026 00:00:00 +0000
+
 arctis-sound-manager (1.4.28-1) noble; urgency=medium
 
   * A software ChatMix bar on the Channels page. It balances Chat
