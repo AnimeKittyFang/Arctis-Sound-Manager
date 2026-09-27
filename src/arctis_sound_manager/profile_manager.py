@@ -329,15 +329,25 @@ def _apply_eq_mode(new_mode: str) -> None:
 def _apply_volumes(volumes: dict[str, int]) -> None:
     try:
         import pulsectl
-        mapping = {"game": "Arctis_Game", "chat": "Arctis_Chat", "media": "Arctis_Media"}
+        from arctis_sound_manager.constants import (PULSE_CHAT_NODE_NAME,
+                                                    PULSE_GAME_NODE_NAME,
+                                                    PULSE_MEDIA_NODE_NAME)
+
+        # Exact names: a substring match also hit real cards such as
+        # "…SteelSeries_Arctis_GameBuds_X…" (#269).
+        sink_name_by_channel = {
+            "game": PULSE_GAME_NODE_NAME,
+            "chat": PULSE_CHAT_NODE_NAME,
+            "media": PULSE_MEDIA_NODE_NAME,
+        }
         with pulsectl.Pulse("asm-profile-apply") as pulse:
             sinks = pulse.sink_list()
-            for key, substr in mapping.items():
-                if key not in volumes:
+            for channel, sink_name in sink_name_by_channel.items():
+                if channel not in volumes:
                     continue
-                val = max(0, min(100, volumes[key])) / 100.0
+                val = max(0, min(100, volumes[channel])) / 100.0
                 for sink in sinks:
-                    if substr in sink.name:
+                    if sink.name == sink_name:
                         pulse.volume_set_all_chans(sink, val)
             if "output" in volumes:
                 val = max(0, min(100, volumes["output"])) / 100.0

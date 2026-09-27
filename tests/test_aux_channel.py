@@ -263,9 +263,9 @@ def test_a_stream_on_aux_belongs_to_its_card(page):
     everything no card represents, and Arctis_Aux was not on the list of sinks
     a card stands for."""
     from types import SimpleNamespace
-    from arctis_sound_manager.gui.home_page import SINK_AUX
+    from arctis_sound_manager.gui.home_page import AUX_SINK_NAME
 
-    sinks = [SimpleNamespace(index=7, name=SINK_AUX, description="Aux")]
+    sinks = [SimpleNamespace(index=7, name=AUX_SINK_NAME, description="Aux")]
 
     assert 7 in page._channel_sink_indices(sinks, None)
 

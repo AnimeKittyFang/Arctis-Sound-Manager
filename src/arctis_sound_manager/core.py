@@ -23,7 +23,8 @@ from arctis_sound_manager.config import (CommandTransport,
                                          DeviceConfiguration,
                                          load_device_configurations,
                                          parsed_status)
-from arctis_sound_manager.constants import (PULSE_CHAT_NODE_NAME,
+from arctis_sound_manager.constants import (PULSE_AUX_NODE_NAME,
+                                            PULSE_CHAT_NODE_NAME,
                                             PULSE_GAME_NODE_NAME,
                                             PULSE_MEDIA_NODE_NAME,
                                             STEELSERIES_VENDOR_ID)
@@ -3499,17 +3500,21 @@ class CoreEngine:
 
         self.pa_audio_manager.redirect_audio(target)
 
-    # Sink name fragments that mean "audio is going through the Arctis headset".
-    # Includes all three virtual loopbacks, the full Sonar EQ pipeline and the
-    # raw SteelSeries ALSA node. If the current default matches any fragment
-    # we fall back to the user-configured disconnect device.
-    _ARCTIS_OWNED_SINK_FRAGMENTS = (
-        'Arctis_Game', 'Arctis_Chat', 'Arctis_Media',
+    # Exact sink names that mean "audio is going through the Arctis headset":
+    # the virtual channel sinks and the full Sonar EQ pipeline (the raw
+    # SteelSeries ALSA node is caught by vendor id below). If the current
+    # default is one of them we fall back to the user-configured disconnect
+    # device. Exact, not substring: "Arctis_Game" is also inside
+    # "…SteelSeries_Arctis_GameBuds_X…" (#269).
+    _ARCTIS_OWNED_SINK_NAMES = (
+        PULSE_GAME_NODE_NAME, PULSE_CHAT_NODE_NAME, PULSE_MEDIA_NODE_NAME,
+        PULSE_AUX_NODE_NAME,
         'effect_input.sonar-game-eq',
         'effect_input.sonar-chat-eq',
         'effect_input.sonar-media-eq',
         'effect_input.sonar-output-eq',
         'effect_input.virtual-surround-7.1-hesuvi',
+        'effect_input.virtual-surround-7.1-hesuvi-media',
     )
 
     def redirect_audio_on_disconnect(self):
@@ -3548,9 +3553,7 @@ class CoreEngine:
             current_name.startswith('alsa_output')
             and int(current_default_device.proplist.get('device.vendor.id', '0') or '0', 16) == STEELSERIES_VENDOR_ID
         )
-        is_arctis_owned = any(
-            frag in current_name for frag in self._ARCTIS_OWNED_SINK_FRAGMENTS
-        )
+        is_arctis_owned = current_name in self._ARCTIS_OWNED_SINK_NAMES
 
         if is_steelseries_alsa or is_arctis_owned:
             self.pa_audio_manager.redirect_audio(redirect_device)
@@ -3575,7 +3578,7 @@ class CoreEngine:
             name = getattr(sink, 'name', '') or ''
             if not name:
                 continue
-            if any(frag in name for frag in self._ARCTIS_OWNED_SINK_FRAGMENTS):
+            if name in self._ARCTIS_OWNED_SINK_NAMES:
                 continue
             props = getattr(sink, 'proplist', {}) or {}
             try:

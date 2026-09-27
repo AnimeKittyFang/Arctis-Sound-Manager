@@ -92,6 +92,10 @@ from arctis_sound_manager.gui.theme import (
 )
 
 from arctis_sound_manager.channel_volumes import save_channel_volume
+from arctis_sound_manager.constants import (PULSE_AUX_NODE_NAME,
+                                            PULSE_CHAT_NODE_NAME,
+                                            PULSE_GAME_NODE_NAME,
+                                            PULSE_MEDIA_NODE_NAME)
 from arctis_sound_manager.i18n import I18n
 from arctis_sound_manager.power_status import HeadsetPower, normalize_power_value
 from arctis_sound_manager.pw_utils import (
@@ -102,12 +106,53 @@ from arctis_sound_manager.pw_utils import (
 
 logger = logging.getLogger("HomePage")
 
-# PulseAudio sink name fragments to match
-SINK_GAME  = "Arctis_Game"
-SINK_CHAT  = "Arctis_Chat"
-SINK_MEDIA = "Arctis_Media"
-SINK_AUX   = "Arctis_Aux"
+# Exact node.name of ASM's virtual channel sinks. Compare with ==, never `in`:
+# real cards carry these strings in their own names (#269).
+GAME_SINK_NAME  = PULSE_GAME_NODE_NAME
+CHAT_SINK_NAME  = PULSE_CHAT_NODE_NAME
+MEDIA_SINK_NAME = PULSE_MEDIA_NODE_NAME
+AUX_SINK_NAME   = PULSE_AUX_NODE_NAME
 STEELSERIES_VENDOR_ID = "0x1038"
+
+
+def _is_running(sink) -> bool:
+    return bool(getattr(sink, 'state', None)) and str(sink.state) == "running"
+
+
+def _channel_sinks(sinks, name: str) -> list:
+    """ASM's virtual sinks for one channel, matched by exact name.
+
+    Never a substring match: a real SteelSeries card can carry the channel's
+    name inside its own — the GameBuds X sink is
+    ``alsa_output.usb-SteelSeries_Arctis_GameBuds_X-00…`` — and the Game card
+    then showed and drove that card's volume, and listed its apps, instead of
+    Arctis_Game's (#269).
+    """
+    return [s for s in sinks if s.name == name]
+
+
+def _channel_sink(sinks, name: str):
+    """The one sink a channel card shows: the running duplicate if any."""
+    matches = _channel_sinks(sinks, name)
+    running = [s for s in matches if _is_running(s)]
+    return (running or matches or [None])[0]
+
+
+def _headset_sink(sinks):
+    """The headset's own physical output, for the Master card.
+
+    Several SteelSeries cards can be plugged at once (#269: a Nova Pro and
+    GameBuds X). The one ASM plays through is running; an idle second card
+    is suspended, so it only wins when nothing better is there.
+    """
+    candidates = [
+        s for s in sinks
+        if (s.name.startswith("alsa_output") or s.name.startswith("bluez_output"))
+        and ("SteelSeries" in s.name
+             or s.proplist.get("device.vendor.id", "") == STEELSERIES_VENDOR_ID)
+    ]
+    running = [s for s in candidates if _is_running(s)]
+    return (running or candidates or [None])[0]
 
 
 def _make_vertical_slider_qss(accent_color: str, groove_color: str | None = None) -> str:
@@ -1033,19 +1078,19 @@ class HomePage(QWidget):
         # Game card — use active-theme color at construction time
         self._game_card = AudioCard(I18n.translate("ui", "game"), _theme.c("COLOR_GAME"), GAME_ICON)
         self._game_card.set_on_change(self._on_media_volume_changed)
-        self._game_card.set_on_drop(lambda si, app, pid: self._on_stream_drop(si, app, pid, SINK_GAME))
+        self._game_card.set_on_drop(lambda si, app, pid: self._on_stream_drop(si, app, pid, GAME_SINK_NAME))
         self._cards_layout.addWidget(self._game_card, stretch=1)
 
         # Chat card (Arctis_Chat sink)
         self._chat_card = AudioCard(I18n.translate("ui", "chat"), _theme.c("COLOR_CHAT"), CHAT_ICON)
         self._chat_card.set_on_change(self._on_chat_volume_changed)
-        self._chat_card.set_on_drop(lambda si, app, pid: self._on_stream_drop(si, app, pid, SINK_CHAT))
+        self._chat_card.set_on_drop(lambda si, app, pid: self._on_stream_drop(si, app, pid, CHAT_SINK_NAME))
         self._cards_layout.addWidget(self._chat_card, stretch=1)
 
         # Media card (Arctis_Media sink)
         self._media_card = AudioCard(I18n.translate("ui", "media"), _theme.c("COLOR_AUX"), MEDIA_ICON)
         self._media_card.set_on_change(self._on_aux_volume_changed)
-        self._media_card.set_on_drop(lambda si, app, pid: self._on_stream_drop(si, app, pid, SINK_MEDIA))
+        self._media_card.set_on_drop(lambda si, app, pid: self._on_stream_drop(si, app, pid, MEDIA_SINK_NAME))
         self._cards_layout.addWidget(self._media_card, stretch=1)
 
         # Aux card — the opt-in fourth playback channel (#209). Built once and
@@ -1054,7 +1099,7 @@ class HomePage(QWidget):
         # step with the other four without a second code path.
         self._aux_card = AudioCard(I18n.translate("ui", "aux"), _theme.c("COLOR_AUX2"), MEDIA_ICON)
         self._aux_card.set_on_change(self._on_aux_channel_volume_changed)
-        self._aux_card.set_on_drop(lambda si, app, pid: self._on_stream_drop(si, app, pid, SINK_AUX))
+        self._aux_card.set_on_drop(lambda si, app, pid: self._on_stream_drop(si, app, pid, AUX_SINK_NAME))
         self._aux_card.setVisible(False)
         self._cards_layout.addWidget(self._aux_card, stretch=1)
 
@@ -1254,9 +1299,9 @@ class HomePage(QWidget):
         # Format: (short_label, button_color, callback)
         # Note: apply_theme() rebuilds this registry with fresh colors on every theme change.
         _AppTag._cards_registry = [
-            ("G", _theme.c("COLOR_GAME"), lambda si, app, pid: self._on_stream_drop(si, app, pid, SINK_GAME)),
-            ("C", _theme.c("COLOR_CHAT"), lambda si, app, pid: self._on_stream_drop(si, app, pid, SINK_CHAT)),
-            ("M", _theme.c("COLOR_AUX"),  lambda si, app, pid: self._on_stream_drop(si, app, pid, SINK_MEDIA)),
+            ("G", _theme.c("COLOR_GAME"), lambda si, app, pid: self._on_stream_drop(si, app, pid, GAME_SINK_NAME)),
+            ("C", _theme.c("COLOR_CHAT"), lambda si, app, pid: self._on_stream_drop(si, app, pid, CHAT_SINK_NAME)),
+            ("M", _theme.c("COLOR_AUX"),  lambda si, app, pid: self._on_stream_drop(si, app, pid, MEDIA_SINK_NAME)),
             ("O", _theme.c("COLOR_HDMI"), lambda si, app, pid: self._on_stream_drop_ext(si, app, pid)),
         ]
         self._refresh_app_tag_buttons()
@@ -1370,11 +1415,11 @@ class HomePage(QWidget):
 
         # Update _AppTag registry with fresh accent colors
         _AppTag._cards_registry = [
-            ("G", color_game, lambda si, app, pid: self._on_stream_drop(si, app, pid, SINK_GAME)),
-            ("C", color_chat, lambda si, app, pid: self._on_stream_drop(si, app, pid, SINK_CHAT)),
-            ("M", color_aux,  lambda si, app, pid: self._on_stream_drop(si, app, pid, SINK_MEDIA)),
+            ("G", color_game, lambda si, app, pid: self._on_stream_drop(si, app, pid, GAME_SINK_NAME)),
+            ("C", color_chat, lambda si, app, pid: self._on_stream_drop(si, app, pid, CHAT_SINK_NAME)),
+            ("M", color_aux,  lambda si, app, pid: self._on_stream_drop(si, app, pid, MEDIA_SINK_NAME)),
             *([("A", _theme.c("COLOR_AUX2"),
-                lambda si, app, pid: self._on_stream_drop(si, app, pid, SINK_AUX))]
+                lambda si, app, pid: self._on_stream_drop(si, app, pid, AUX_SINK_NAME))]
               if not self._aux_card.isHidden() else []),
             ("O", color_hdmi, lambda si, app, pid: self._on_stream_drop_ext(si, app, pid)),
         ]
@@ -1862,24 +1907,9 @@ class HomePage(QWidget):
         try:
             sinks = pulse.sink_list()
 
-            def _find_all(fragment) -> list:
-                return [s for s in sinks if fragment in s.name]
-
-            def _primary(lst):
-                """Pick the running sink if any, else first."""
-                running = [s for s in lst if getattr(s, 'state', None) and str(s.state) == "running"]
-                return (running or lst or [None])[0]
-
-            sinks_game  = _find_all(SINK_GAME)
-            sinks_chat  = _find_all(SINK_CHAT)
-            sinks_media = _find_all(SINK_MEDIA)
-            # Empty while the optional channel is off, which _update_apps
-            # already reads as "no rows".
-            sinks_aux   = _find_all(SINK_AUX)
-
-            sink_game  = _primary(sinks_game)
-            sink_chat  = _primary(sinks_chat)
-            sink_media = _primary(sinks_media)
+            sink_game  = _channel_sink(sinks, GAME_SINK_NAME)
+            sink_chat  = _channel_sink(sinks, CHAT_SINK_NAME)
+            sink_media = _channel_sink(sinks, MEDIA_SINK_NAME)
 
             if sink_game is None and sink_chat is None and sink_media is None:
                 self._set_disconnected()
@@ -1906,7 +1936,7 @@ class HomePage(QWidget):
 
             # Aux exists only while the channel is switched on, so a missing
             # sink here is the normal case and not a fault to report.
-            sink_aux = next((s for s in sinks if s.name == SINK_AUX), None)
+            sink_aux = next((s for s in sinks if s.name == AUX_SINK_NAME), None)
             if sink_aux is not None:
                 aux_pct = round(sink_aux.volume.value_flat * 100)
                 self._aux_card.set_volume(aux_pct)
@@ -1917,13 +1947,7 @@ class HomePage(QWidget):
             # Master: the headset's own physical output, downstream of every
             # channel above — independent of whatever device is selected for
             # Output below, which may be a different, unrelated sink entirely.
-            sink_master = next(
-                (s for s in sinks
-                 if (s.name.startswith("alsa_output") or s.name.startswith("bluez_output"))
-                 and ("SteelSeries" in s.name
-                      or s.proplist.get("device.vendor.id", "") == STEELSERIES_VENDOR_ID)),
-                None,
-            )
+            sink_master = _headset_sink(sinks)
             if sink_master is not None:
                 master_pct = round(sink_master.volume.value_flat * 100)
                 self._master_card.set_volume(master_pct)
@@ -1959,6 +1983,12 @@ class HomePage(QWidget):
                 self._ext_card.set_disconnected()
 
             # Update application lists — pass all matching sinks to catch duplicates
+            sinks_game  = _channel_sinks(sinks, GAME_SINK_NAME)
+            sinks_chat  = _channel_sinks(sinks, CHAT_SINK_NAME)
+            sinks_media = _channel_sinks(sinks, MEDIA_SINK_NAME)
+            # Empty while the optional channel is off, which _update_apps
+            # already reads as "no rows".
+            sinks_aux   = _channel_sinks(sinks, AUX_SINK_NAME)
             sink_inputs = pulse.sink_input_list()
             pulse_app_names = {si.proplist.get("application.name", "") for si in sink_inputs}
             rows_by_card = {
@@ -2120,9 +2150,10 @@ class HomePage(QWidget):
         from its AUX port, setting the hardware device as the system default is
         a sensible choice, and it made every application invisible to ASM.
         """
-        wanted = (SINK_GAME, SINK_CHAT, SINK_MEDIA, SINK_AUX,
-                  "effect_input.sonar-", "effect_input.virtual-surround")
-        indices = {s.index for s in sinks if any(w in s.name for w in wanted)}
+        channels = (GAME_SINK_NAME, CHAT_SINK_NAME, MEDIA_SINK_NAME, AUX_SINK_NAME)
+        prefixes = ("effect_input.sonar-", "effect_input.virtual-surround")
+        indices = {s.index for s in sinks
+                   if s.name in channels or s.name.startswith(prefixes)}
         if sink_ext is not None:
             indices.add(sink_ext.index)
             # The Output card also lists streams sitting on the output EQ.
@@ -2273,10 +2304,10 @@ class HomePage(QWidget):
         native = self._native_cache
 
         card_map = {
-            SINK_GAME:  self._game_card,
-            SINK_CHAT:  self._chat_card,
-            SINK_MEDIA: self._media_card,
-            SINK_AUX:   self._aux_card,
+            GAME_SINK_NAME:  self._game_card,
+            CHAT_SINK_NAME:  self._chat_card,
+            MEDIA_SINK_NAME: self._media_card,
+            AUX_SINK_NAME:   self._aux_card,
         }
 
         per_card: dict[int, list] = {}
@@ -2287,7 +2318,7 @@ class HomePage(QWidget):
             if self._is_asm_internal_node(node_name):
                 continue  # ASM's own node, not a user application
             sink_name = s.get("sink_name") or ""
-            card = next((c for bound, c in card_map.items() if bound in sink_name), None)
+            card = card_map.get(sink_name)
             if card is None:
                 continue
             per_card.setdefault(id(card), []).append(
@@ -2318,7 +2349,7 @@ class HomePage(QWidget):
             return
         try:
             sinks = pulse.sink_list()
-            target = next((s for s in sinks if target_sink_name in s.name), None)
+            target = next((s for s in sinks if s.name == target_sink_name), None)
             if target is None:
                 logger.warning("Sink %s not found", target_sink_name)
                 return
@@ -2604,18 +2635,18 @@ class HomePage(QWidget):
         """
         registry = [
             ("G", _theme.c("COLOR_GAME"),
-             lambda si, app, pid: self._on_stream_drop(si, app, pid, SINK_GAME)),
+             lambda si, app, pid: self._on_stream_drop(si, app, pid, GAME_SINK_NAME)),
             ("C", _theme.c("COLOR_CHAT"),
-             lambda si, app, pid: self._on_stream_drop(si, app, pid, SINK_CHAT)),
+             lambda si, app, pid: self._on_stream_drop(si, app, pid, CHAT_SINK_NAME)),
             ("M", _theme.c("COLOR_AUX"),
-             lambda si, app, pid: self._on_stream_drop(si, app, pid, SINK_MEDIA)),
+             lambda si, app, pid: self._on_stream_drop(si, app, pid, MEDIA_SINK_NAME)),
         ]
         # No button for a channel with no sink behind it: pressing it would
         # move the stream to a target that does not exist and lose the audio.
         if not self._aux_card.isHidden():
             registry.append(
                 ("A", _theme.c("COLOR_AUX2"),
-                 lambda si, app, pid: self._on_stream_drop(si, app, pid, SINK_AUX)))
+                 lambda si, app, pid: self._on_stream_drop(si, app, pid, AUX_SINK_NAME)))
         registry.append(
             ("O", _theme.c("COLOR_HDMI"),
              lambda si, app, pid: self._on_stream_drop_ext(si, app, pid)))
@@ -2648,8 +2679,8 @@ class HomePage(QWidget):
                 # three virtual sinks are remembered; the external device sink is
                 # system-owned and left to WirePlumber's own restore.
                 node = next(
-                    (frag for frag in (SINK_GAME, SINK_CHAT, SINK_MEDIA)
-                     if frag in fresh_sink.name),
+                    (name for name in (GAME_SINK_NAME, CHAT_SINK_NAME, MEDIA_SINK_NAME)
+                     if name == fresh_sink.name),
                     None,
                 )
                 if node is not None:
