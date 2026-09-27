@@ -12,7 +12,13 @@ from arctis_sound_manager.gui.qt_widgets.q_toggle import QToggle
 class QDualState(QWidget):
     checkStateChanged = Signal(Qt.CheckState)
 
-    def __init__(self, off_text: str, on_text: str, init_state: Literal['left', 'right'], parent: QWidget|None = None):
+    def __init__(self, off_text: str, on_text: str, init_state: Literal['left', 'right'], parent: QWidget|None = None,
+                 accent: bool = False):
+        '''
+        Args:
+            accent: fill the switch with the accent color when on, like the Sonar
+                toggles. Leave False for two neutral choices (low/high, speed/range).
+        '''
         super().__init__(parent)
 
         self.main_layout = QHBoxLayout()
@@ -21,7 +27,7 @@ class QDualState(QWidget):
         self.on_text = on_text
 
         self.status_label = QLabel(self.on_text if init_state == 'right' else self.off_text)
-        self.toggle = QToggle(parent=self, is_checkbox=(not on_text))
+        self.toggle = QToggle(parent=self, is_checkbox=(accent or not on_text))
         self.toggle.setChecked(init_state == 'right')
         self.toggle.checkStateChanged.connect(self.checkStateChanged)
         self.toggle.checkStateChanged.connect(self._on_state_changed)

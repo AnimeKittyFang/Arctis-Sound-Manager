@@ -25,7 +25,7 @@ from arctis_sound_manager.gui.theme_share import (
 
 @pytest.fixture
 def valid_colors() -> dict[str, str]:
-    """A complete set of 15 valid #RRGGBB colors covering all THEME_KEYS."""
+    """A complete set of valid #RRGGBB colors covering all THEME_KEYS."""
     base = {
         "BG_MAIN":          "#1A1A2E",
         "BG_SIDEBAR":       "#16213E",
@@ -43,6 +43,9 @@ def valid_colors() -> dict[str, str]:
         "COLOR_AUX":        "#FB4A00",
         "COLOR_AUX2":       "#E4B53C",
         "COLOR_HDMI":       "#9B59B6",
+        "TOGGLE_ON":        "#E94560",
+        "TOGGLE_OFF":       "#533483",
+        "COLOR_MASTER":     "#9E9E9E",
     }
     assert set(base) == set(THEME_KEYS)
     return base
@@ -232,3 +235,15 @@ def test_every_optional_key_is_a_real_key():
     from arctis_sound_manager.gui.theme import THEME_KEYS, THEME_KEYS_OPTIONAL
 
     assert THEME_KEYS_OPTIONAL <= set(THEME_KEYS)
+
+
+def test_a_link_without_toggle_colours_keeps_its_own_switch_look():
+    """Toggle colours default to the theme's own accent / button background,
+    not the default palette's: an older theme keeps the switches it had."""
+    from arctis_sound_manager.gui.theme import THEMES
+    from arctis_sound_manager.gui.theme_share import decode_theme_link
+
+    out = decode_theme_link(_link_without("TOGGLE_ON", "TOGGLE_OFF"))
+
+    assert out["colors"]["TOGGLE_ON"] == THEMES["aurora"]["ACCENT"]
+    assert out["colors"]["TOGGLE_OFF"] == THEMES["aurora"]["BG_BUTTON"]

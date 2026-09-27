@@ -9,16 +9,17 @@ import json
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QUrl, Signal, Slot
-from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPen, QPixmap
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
-    QComboBox,
     QHBoxLayout,
     QLabel,
+    QLayout,
+    QMenu,
     QPushButton,
     QSizePolicy,
-    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -70,14 +71,23 @@ def _save_hidden_apps(keys: set[str]) -> None:
     tmp.write_text(json.dumps(sorted(keys)))
     tmp.replace(HIDDEN_APPS_FILE)
 
+from arctis_sound_manager.gui.app_icons import app_icon, icon_hint
 from arctis_sound_manager.gui.components import (
+    AUX_ICON,
     CHAT_ICON,
+    EQUALIZER_ICON,
     GAME_ICON,
     HDMI_ICON,
     HEADPHONE_ICON,
     MEDIA_ICON,
+    OUTPUT_ICON,
     SvgIconWidget,
+    tinted_svg_pixmap,
 )
+from arctis_sound_manager.gui.fader_slider import (FADER_HANDLE_QSS, FADER_HANDLE_QSS_H,
+                                                   FaderSlider)
+from arctis_sound_manager.gui.qt_widgets.q_toggle import QToggle
+from arctis_sound_manager.gui.search_pick_dialog import SearchPickDialog
 import arctis_sound_manager.gui.theme as _theme
 from arctis_sound_manager.gui.theme import (
     ACCENT,
@@ -173,14 +183,6 @@ def _make_vertical_slider_qss(accent_color: str, groove_color: str | None = None
             background: {groove};
             border-radius: 3px;
         }}
-        QSlider::handle:vertical {{
-            background: white;
-            border: none;
-            width: 18px;
-            height: 18px;
-            margin: 0 -6px;
-            border-radius: 9px;
-        }}
         QSlider::sub-page:vertical {{
             background: white;
             border-radius: 3px;
@@ -189,7 +191,7 @@ def _make_vertical_slider_qss(accent_color: str, groove_color: str | None = None
             background: {accent_color};
             border-radius: 3px;
         }}
-    """
+    """ + FADER_HANDLE_QSS
 
 
 def _make_chatmix_bar_qss(track_css: str) -> str:
@@ -207,21 +209,13 @@ def _make_chatmix_bar_qss(track_css: str) -> str:
             background: {track_css};
             border-radius: 3px;
         }}
-        QSlider::handle:horizontal {{
-            background: white;
-            border: none;
-            width: 18px;
-            height: 18px;
-            margin: -6px 0;
-            border-radius: 9px;
-        }}
         QSlider::sub-page:horizontal {{
             background: transparent;
         }}
         QSlider::add-page:horizontal {{
             background: transparent;
         }}
-    """
+    """ + FADER_HANDLE_QSS_H
 
 
 # Which theme colour key drives each ChatMix-eligible channel's slider,
@@ -266,18 +260,15 @@ def chatmix_bar_track_css(channel_colors: list[str], chat_color: str) -> str:
     return f"qlineargradient(x1:0, y1:0, x2:1, y2:0, {parts})"
 
 
-class _ChatMixSlider(QSlider):
+class _ChatMixSlider(FaderSlider):
     """Horizontal ChatMix slider (#269) with a fixed tick marking its centre.
 
     The groove alone gives no visual anchor for "both sides full volume" —
-    this draws a short tick over the middle of the groove after the normal
-    paint, the same way equalizer_page's curve widgets layer their own
-    QPainter drawing on top of the base paintEvent.
+    this draws a short tick over the middle of the groove, under the fader
+    cap like the EQ sliders' ticks.
     """
 
-    def paintEvent(self, event) -> None:
-        super().paintEvent(event)
-        painter = QPainter(self)
+    def paint_under_cap(self, painter: QPainter) -> None:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         pen = QPen(QColor("white"))
         pen.setWidth(2)
@@ -285,7 +276,6 @@ class _ChatMixSlider(QSlider):
         cx = self.width() // 2
         cy = self.height() // 2
         painter.drawLine(cx, cy - 9, cx, cy + 9)
-        painter.end()
 
 
 def chatmix_bar_to_percentages(position: int) -> tuple[int, int]:
@@ -325,11 +315,6 @@ def chatmix_percentages_to_bar_position(channels_pct: int, chat_pct: int) -> int
 # and the device picker; below it the picker starts eliding names to nothing.
 CARD_MIN_WIDTH = 260
 CARD_MIN_WIDTH_TIGHT = 205
-
-# Master isn't a channel with its own theme color — it's the headset's own
-# physical volume, so it stays a neutral gray across every theme instead of
-# following COLOR_GAME/COLOR_CHAT/etc.
-MASTER_COLOR = "#9E9E9E"
 
 
 def _read_aux_enabled() -> bool:
@@ -403,9 +388,10 @@ class AudioCard(QWidget):
         header_layout.setSpacing(8)
         header_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
 
+        self._icon: SvgIconWidget | None = None
         if svg_path:
-            icon = SvgIconWidget(svg_path, accent_color, size=36, width=48)
-            header_layout.addWidget(icon)
+            self._icon = SvgIconWidget(svg_path, accent_color, size=36, width=48)
+            header_layout.addWidget(self._icon)
 
         self._name_lbl = QLabel(channel_name)
         self._name_lbl.setStyleSheet(
@@ -424,7 +410,7 @@ class AudioCard(QWidget):
         top_layout.addWidget(self._pct_label)
 
         # Vertical slider
-        self._slider = QSlider(Qt.Orientation.Vertical)
+        self._slider = FaderSlider(Qt.Orientation.Vertical)
         self._slider.setMinimum(0)
         self._slider.setMaximum(100)
         self._slider.setTickInterval(10)
@@ -453,7 +439,7 @@ class AudioCard(QWidget):
             f"color: {_theme.c('TEXT_PRIMARY')}; font-size: 10pt; background: transparent;"
         )
         hw_layout.addWidget(self._hw_pct_label)
-        self._hw_slider = QSlider(Qt.Orientation.Vertical)
+        self._hw_slider = FaderSlider(Qt.Orientation.Vertical)
         self._hw_slider.setMinimum(0)
         self._hw_slider.setMaximum(100)
         self._hw_slider.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
@@ -479,17 +465,27 @@ class AudioCard(QWidget):
         outer.addWidget(top_widget, stretch=1)
 
         # Optional EQ preset picker (the channel's favorites from the Equalizer
-        # page), hidden until set_presets() is called (#256).
-        self._preset_combo = QComboBox()
-        self._preset_combo.setToolTip(I18n.translate("ui", "channel_eq_preset_hint"))
-        self._preset_combo.activated.connect(self._on_preset_activated)
-        self._preset_combo.hide()
-        # What the combo currently lists, so a poll that would draw the same
-        # thing leaves it alone (and never closes an open popup).
+        # page), hidden until set_presets() is called (#256). A small button
+        # opening the Equalizer page's preset search, limited to the favorites.
+        self._preset_btn = self._make_card_button(self._on_preset_clicked)
+        # Output device picker, next to it: the same window, listing where
+        # this channel's audio can go. Hidden until set_output_picker().
+        self._output_btn = self._make_card_button(self._on_output_clicked)
+        self._output_btn.setToolTip(I18n.translate("ui", "output_device"))
+        self._output_picker = None
+        self._style_card_buttons()
+        # What the picker currently offers, so a poll that would show the
+        # same thing leaves it alone.
         self._preset_sig: tuple | None = None
+        self._preset_channel = ""
         self._on_preset_callback = None
-        outer.addWidget(self._preset_combo)
-        outer.setAlignment(self._preset_combo, Qt.AlignmentFlag.AlignHCenter)
+        buttons_row = QHBoxLayout()
+        buttons_row.setSpacing(6)
+        buttons_row.addStretch(1)
+        buttons_row.addWidget(self._preset_btn)
+        buttons_row.addWidget(self._output_btn)
+        buttons_row.addStretch(1)
+        outer.addLayout(buttons_row)
 
         outer.addSpacing(8)
 
@@ -503,15 +499,9 @@ class AudioCard(QWidget):
         apps_layout.setContentsMargins(12, 10, 12, 10)
         apps_layout.setSpacing(6)
 
-        self._apps_title = QLabel(I18n.translate("ui", "applications"))
-        self._apps_title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        self._apps_title.setStyleSheet(
-            f"color: {_theme.c('TEXT_PRIMARY')}; font-size: 9pt; font-weight: bold; background: transparent;"
-        )
-        apps_layout.addWidget(self._apps_title)
-
-        self._apps_area = QVBoxLayout()
-        self._apps_area.setSpacing(4)
+        # Icons, not names: a row of names only fit one or two applications
+        # before the card ran out of height. They wrap onto the next line.
+        self._apps_area = _FlowLayout(spacing=6)
         # What the application row currently shows, so a poll that would draw
         # the same thing can leave it alone. None means "nothing drawn yet".
         self._app_sig: tuple | None = None
@@ -553,6 +543,13 @@ class AudioCard(QWidget):
         """Restyle all dynamic-color elements using the current active theme."""
         # Card background / border
         self._apply_normal_style()
+        # Channel name and icon take the card's (possibly new) accent
+        self._name_lbl.setStyleSheet(
+            f"color: {self._accent}; font-size: 14pt; font-weight: normal; background: transparent;"
+        )
+        if self._icon is not None:
+            self._icon.set_color(self._accent)
+        self._style_card_buttons()
         # Slider groove color follows the theme; accent stays per-channel
         self._slider.setStyleSheet(_make_vertical_slider_qss(self._accent))
         self._hw_slider.setStyleSheet(_make_vertical_slider_qss(self._accent))
@@ -566,14 +563,10 @@ class AudioCard(QWidget):
         self._hw_caption.setStyleSheet(
             f"color: {_theme.c('TEXT_PRIMARY')}; font-size: 8pt; background: transparent;"
         )
-        # Applications section background and title
+        # Applications section background
         if hasattr(self, "_apps_widget"):
             self._apps_widget.setStyleSheet(
                 f"QWidget#appsWidget {{ background-color: {_theme.c('BG_MAIN')}; border-radius: 12px; }}"
-            )
-        if hasattr(self, "_apps_title"):
-            self._apps_title.setStyleSheet(
-                f"color: {_theme.c('TEXT_PRIMARY')}; font-size: 9pt; font-weight: bold; background: transparent;"
             )
     def set_highlight(self, active: bool):
         """Highlight this card visually when an app tag is dragged over it."""
@@ -610,18 +603,19 @@ class AudioCard(QWidget):
         self._hw_pct_label.setText(f"{pct}%")
         self._hw_gauge_widget.show()
 
-    def set_on_preset(self, callback):
+    def set_on_preset(self, callback, channel: str = ""):
         self._on_preset_callback = callback
+        self._preset_channel = channel
 
     def set_presets(self, names: list[str] | None, active: str = ""):
-        """List *names* in the preset picker with *active* selected, or hide
+        """Offer *names* in the preset picker with *active* selected, or hide
         the picker when *names* is None (EQ not in Sonar mode).
 
         The active preset is listed even when it isn't a favorite, so the
         picker always shows what is really applied."""
         if names is None:
             self._preset_sig = None
-            self._preset_combo.hide()
+            self._preset_btn.hide()
             return
         items = list(names)
         if active and active not in items:
@@ -629,27 +623,85 @@ class AudioCard(QWidget):
         sig = (tuple(items), active)
         if sig != self._preset_sig:
             self._preset_sig = sig
-            self._preset_combo.blockSignals(True)
-            self._preset_combo.clear()
-            if items:
-                self._preset_combo.addItems(items)
-                self._preset_combo.setCurrentIndex(items.index(active) if active in items else -1)
-            else:
-                self._preset_combo.addItem(I18n.translate("ui", "no_presets_saved"))
-            self._preset_combo.setEnabled(bool(items))
-            self._preset_combo.blockSignals(False)
-        self._preset_combo.show()
+            hint = I18n.translate("ui", "channel_eq_preset_hint")
+            if not items:
+                hint += "\n" + I18n.translate("ui", "no_presets_saved")
+            elif active:
+                hint += f"\n▶ {active}"
+            self._preset_btn.setToolTip(hint)
+            self._preset_btn.setEnabled(bool(items))
+        self._preset_btn.show()
 
     def set_preset_busy(self, busy: bool):
         """Lock the picker while a preset is being applied."""
-        self._preset_combo.setEnabled(not busy and bool(self._preset_sig and self._preset_sig[0]))
+        self._preset_btn.setEnabled(not busy and bool(self._preset_sig and self._preset_sig[0]))
 
-    def _on_preset_activated(self, index: int):
-        name = self._preset_combo.itemText(index)
-        if not self._preset_sig or name == self._preset_sig[1]:
+    @staticmethod
+    def _make_card_button(on_click) -> QPushButton:
+        btn = QPushButton()
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setFixedSize(36, 28)
+        btn.setIconSize(QSize(16, 16))
+        btn.clicked.connect(on_click)
+        btn.hide()
+        return btn
+
+    def _style_card_buttons(self):
+        self._preset_btn.setIcon(QIcon(tinted_svg_pixmap(EQUALIZER_ICON, self._accent, 32, 32)))
+        self._output_btn.setIcon(QIcon(tinted_svg_pixmap(OUTPUT_ICON, self._accent, 32, 32)))
+        qss = f"""
+            QPushButton {{
+                background-color: {_theme.c('BG_BUTTON')};
+                border: 1px solid transparent;
+                border-radius: 8px;
+            }}
+            QPushButton:hover {{
+                background-color: {_theme.c('BG_BUTTON_HOVER')};
+                border-color: {self._accent};
+            }}
+            QPushButton:disabled {{
+                background-color: {_theme.c('BG_BUTTON')};
+            }}
+        """
+        self._preset_btn.setStyleSheet(qss)
+        self._output_btn.setStyleSheet(qss)
+
+    def _on_preset_clicked(self):
+        if not self._preset_sig:
+            return
+        # Imported here: the Equalizer page is the heavy module, and the
+        # dialog is the one its "Search preset" button opens.
+        from arctis_sound_manager.gui.sonar_page import _list_presets, _PresetSearchDialog
+
+        items, active = self._preset_sig
+        known = _list_presets(self._preset_channel) if self._preset_channel else {}
+        presets = {name: known.get(name, Path(name)) for name in items}
+        dlg = _PresetSearchDialog(presets, self.window(), current=active, allow_delete=False)
+        dlg.exec()
+        name = dlg.selected_name
+        if dlg.result() != dlg.DialogCode.Accepted or not name or name == active:
             return
         if self._on_preset_callback:
             self._on_preset_callback(name)
+
+    def set_output_picker(self, picker):
+        """Bind the output button to *picker*, the Equalizer page's output
+        selector for this channel (anything with options / current_id / pick).
+        Picking through it keeps both pages showing the same device."""
+        self._output_picker = picker
+        self._output_btn.setVisible(picker is not None)
+
+    def _on_output_clicked(self):
+        if self._output_picker is None:
+            return
+        current = self._output_picker.current_id()
+        dlg = SearchPickDialog(I18n.translate("ui", "output_device"),
+                               self._output_picker.options(), self.window(), current=current)
+        dlg.exec()
+        device_id = dlg.selected_key
+        if dlg.result() != dlg.DialogCode.Accepted or device_id is None or device_id == current:
+            return
+        self._output_picker.pick(device_id)
 
     def set_disconnected(self):
         self._ignore_change = True
@@ -661,9 +713,10 @@ class AudioCard(QWidget):
     def set_connected(self):
         self._slider.setEnabled(True)
 
-    def add_app_tag(self, app_name: str, si_index: int, pid: int, bg_color: str = "#333333"):
-        """Add a draggable application pill/tag in the Applications section."""
-        tag = _AppTag(app_name, si_index, pid, bg_color)
+    def add_app_tag(self, app_name: str, si_index: int, pid: int, bg_color: str = "#333333",
+                    hint: tuple = ("", "", "")):
+        """Add an application icon to the Applications section."""
+        tag = _AppTag(app_name, si_index, pid, bg_color, hint)
         self._apps_area.addWidget(tag)
 
     def clear_apps(self):
@@ -679,67 +732,158 @@ class AudioCard(QWidget):
             self._on_change_callback(value)
 
 
-# ── App tag with inline move buttons ──────────────────────────────────────────
+# ── App icon tag ─────────────────────────────────────────────────────────────
 
-class _AppTag(QWidget):
-    """
-    App tag row:  [app name ·············· G  C  M]
-    G/C/M are small colored buttons to move the stream instantly.
+_APP_ICON_SIZE = 22
+
+
+def _app_pixmap(app_name: str, hint: tuple, color: str, size: int) -> QPixmap:
+    """The application's icon, or its initial on a disc of *color* when no
+    icon can be found (most Proton games)."""
+    icon = app_icon(*hint, app_name=app_name)
+    ratio = QApplication.instance().devicePixelRatio() if QApplication.instance() else 1.0
+    if icon is not None:
+        pixmap = icon.pixmap(QSize(size, size), ratio)
+        if not pixmap.isNull():
+            return pixmap
+    pixmap = QPixmap(int(size * ratio), int(size * ratio))
+    pixmap.setDevicePixelRatio(ratio)
+    pixmap.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(color))
+    painter.drawEllipse(0, 0, size, size)
+    font = painter.font()
+    font.setBold(True)
+    font.setPixelSize(int(size * 0.55))
+    painter.setFont(font)
+    painter.setPen(QColor("#000000"))
+    initial = (app_name.strip()[:1] or "?").upper()
+    painter.drawText(QRect(0, 0, size, size), Qt.AlignmentFlag.AlignCenter, initial)
+    painter.end()
+    return pixmap
+
+
+class _AppTag(QPushButton):
+    """One application on a channel card, shown as its icon.
+
+    The name is in the tooltip; clicking opens a menu of the channels the
+    stream can be moved to (it used to be a row of G/C/M buttons beside the
+    name, which left no room for the name on the narrow Aux-on cards).
     """
 
     # Set by HomePage: list of (short_label, color, callback)
     _cards_registry: list = []
 
-    def __init__(self, app_name: str, si_index: int, pid: int, color: str):
+    # Menu wording for each registry entry, looked up by its short label.
+    _CHANNEL_KEYS = {"G": "game", "C": "chat", "M": "media", "A": "aux", "O": "output"}
+
+    def __init__(self, app_name: str, si_index: int, pid: int, color: str,
+                 hint: tuple = ("", "", "")):
         super().__init__()
+        self._app_name = app_name
         self._si_index = si_index
         self._pid = pid
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(6, 0, 4, 0)
-        layout.setSpacing(4)
-
-        self.setFixedHeight(24)
+        self.setFixedSize(_APP_ICON_SIZE + 10, _APP_ICON_SIZE + 10)
+        self.setIcon(QIcon(_app_pixmap(app_name, hint, color, _APP_ICON_SIZE)))
+        self.setIconSize(QSize(_APP_ICON_SIZE, _APP_ICON_SIZE))
+        self.setToolTip(app_name)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setStyleSheet(
-            f"background-color: #1e2530; border-radius: 4px; border: 1px solid {color};"
+            f"QPushButton {{ background-color: #1e2530; border: 1px solid {color}; "
+            f"border-radius: 6px; padding: 0; }}"
+            f"QPushButton:hover {{ background-color: {color}; }}"
         )
+        self.clicked.connect(self._show_move_menu)
 
-        lbl = QLabel(app_name)
-        lbl.setStyleSheet(
-            f"color: {color}; font-size: 11pt; font-weight: bold; "
-            f"background: transparent; border: none;"
-        )
-        # Ignored, not the default Preferred: on the narrow (Aux-on) card
-        # width there isn't room for both a long app name and every move
-        # button (up to five once Aux and Output are counted). Preferred
-        # would keep demanding the name's full width and push the rightmost
-        # button — Output — past the card's edge instead of shrinking the
-        # name first.
-        lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        layout.addWidget(lbl, stretch=1)
-
-        # Move buttons — built lazily from registry when first painted
-        self._btn_container = QWidget()
-        self._btn_container.setStyleSheet("background: transparent; border: none;")
-        btn_layout = QHBoxLayout(self._btn_container)
-        btn_layout.setContentsMargins(0, 0, 0, 0)
-        btn_layout.setSpacing(3)
-
+    def _show_move_menu(self) -> None:
+        menu = QMenu(self)
+        title = menu.addAction(self._app_name)
+        title.setEnabled(False)
+        menu.addSeparator()
         for short, btn_color, cb in _AppTag._cards_registry:
-            btn = QPushButton(short)
-            btn.setFixedSize(18, 18)
-            btn.setStyleSheet(
-                f"QPushButton {{ background: transparent; color: {btn_color}; "
-                f"border: 1px solid {btn_color}; border-radius: 3px; "
-                f"font-size: 7pt; font-weight: bold; padding: 0; }}"
-                f"QPushButton:hover {{ background: {btn_color}; color: #000; }}"
-            )
-            btn.clicked.connect(
-                lambda checked=False, c=cb, si=si_index, a=app_name, p=pid: c(si, a, p)
-            )
-            btn_layout.addWidget(btn)
+            swatch = QPixmap(12, 12)
+            swatch.fill(QColor(btn_color))
+            key = self._CHANNEL_KEYS.get(short)
+            label = I18n.translate("ui", key) if key else short
+            action = menu.addAction(QIcon(swatch), label)
+            action.triggered.connect(
+                lambda checked=False, c=cb: c(self._si_index, self._app_name, self._pid))
+        menu.exec(self.mapToGlobal(QPoint(0, self.height())))
 
-        layout.addWidget(self._btn_container)
+
+class _FlowLayout(QLayout):
+    """Lays its items out left to right, wrapping onto a new line."""
+
+    def __init__(self, parent=None, spacing: int = 6):
+        super().__init__(parent)
+        self._items = []
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setSpacing(spacing)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._arrange(QRect(0, 0, width, 0), apply=False)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._arrange(rect, apply=True)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        return size
+
+    def _arrange(self, rect: QRect, apply: bool) -> int:
+        """Fill lines left to right, then centre each one under the slider."""
+        gap = self.spacing()
+        lines: list[list] = [[]]
+        line_width = 0
+        for item in self._items:
+            w = item.sizeHint().width()
+            if lines[-1] and line_width + gap + w > rect.width():
+                lines.append([])
+                line_width = 0
+            line_width += (gap if lines[-1] else 0) + w
+            lines[-1].append(item)
+
+        y = rect.y()
+        for line in lines:
+            if not line:
+                continue
+            width = sum(i.sizeHint().width() for i in line) + gap * (len(line) - 1)
+            height = max(i.sizeHint().height() for i in line)
+            x = rect.x() + max(0, (rect.width() - width) // 2)
+            for item in line:
+                hint = item.sizeHint()
+                if apply:
+                    item.setGeometry(QRect(QPoint(x, y), hint))
+                x += hint.width() + gap
+            y += height + gap
+        return max(0, y - gap - rect.y())
 
 
 class _UnassignedRow(QWidget):
@@ -755,7 +899,7 @@ class _UnassignedRow(QWidget):
     """
 
     def __init__(self, app_name: str, playing_on: str, si_index: int, pid: int,
-                 on_dismiss, color: str, muted_color: str):
+                 on_dismiss, color: str, muted_color: str, hint: tuple = ("", "", "")):
         super().__init__()
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 0, 4, 0)
@@ -764,6 +908,11 @@ class _UnassignedRow(QWidget):
         self.setStyleSheet(
             f"background-color: #1e2530; border-radius: 4px; border: 1px solid {muted_color};"
         )
+
+        icon_lbl = QLabel()
+        icon_lbl.setStyleSheet("background: transparent; border: none;")
+        icon_lbl.setPixmap(_app_pixmap(app_name, hint, color, 18))
+        layout.addWidget(icon_lbl)
 
         name_lbl = QLabel(app_name)
         name_lbl.setStyleSheet(
@@ -820,30 +969,14 @@ class _UnassignedRow(QWidget):
 # ── Toggle switch widget ────────────────────────────────────────────────────────
 
 class ToggleSwitch(QWidget):
-    """Simple visual toggle switch using a styled QCheckBox."""
+    """On/off switch: the same QToggle as the Sonar and Settings pages, so it
+    follows the theme's TOGGLE_ON / TOGGLE_OFF colours."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        self._cb = QCheckBox()
-        self._cb.setStyleSheet(
-            """
-            QCheckBox::indicator {
-                width: 44px;
-                height: 24px;
-                border-radius: 12px;
-                background-color: #3A4550;
-                border: none;
-            }
-            QCheckBox::indicator:checked {
-                background-color: #2791CE;
-            }
-            QCheckBox::indicator:unchecked {
-                background-color: #3A4550;
-            }
-            """
-        )
+        self._cb = QToggle(is_checkbox=True)
         layout.addWidget(self._cb)
 
     @property
@@ -1193,7 +1326,7 @@ class HomePage(QWidget):
         # its own dedicated target instead of being capped by whatever
         # headroom that device's own slider allows. Placed leftmost since it
         # isn't one of the routable channels.
-        self._master_card = AudioCard(I18n.translate("ui", "master"), MASTER_COLOR, HEADPHONE_ICON)
+        self._master_card = AudioCard(I18n.translate("ui", "master"), _theme.c("COLOR_MASTER"), HEADPHONE_ICON)
         self._master_card.set_on_change(self._on_master_volume_changed)
         self._cards_layout.addWidget(self._master_card, stretch=1)
 
@@ -1219,7 +1352,7 @@ class HomePage(QWidget):
         # hidden, rather than created on demand: a card that exists from the
         # start keeps its device picker, its drop target and its styling in
         # step with the other four without a second code path.
-        self._aux_card = AudioCard(I18n.translate("ui", "aux"), _theme.c("COLOR_AUX2"), MEDIA_ICON)
+        self._aux_card = AudioCard(I18n.translate("ui", "aux"), _theme.c("COLOR_AUX2"), AUX_ICON)
         self._aux_card.set_on_change(self._on_aux_channel_volume_changed)
         self._aux_card.set_on_drop(lambda si, app, pid: self._on_stream_drop(si, app, pid, AUX_SINK_NAME))
         self._aux_card.setVisible(False)
@@ -1243,7 +1376,7 @@ class HomePage(QWidget):
             applier = SonarPresetApplier(self)
             applier.done.connect(self._on_eq_preset_applied)
             self._preset_appliers[channel] = applier
-            card.set_on_preset(lambda name, ch=channel: self._on_eq_preset_chosen(ch, name))
+            card.set_on_preset(lambda name, ch=channel: self._on_eq_preset_chosen(ch, name), channel)
 
         cards_outer_layout.addWidget(self._cards_widget, stretch=6)
         cards_outer_layout.addStretch(1)
@@ -1537,18 +1670,28 @@ class HomePage(QWidget):
         color_chat = _theme.c("COLOR_CHAT")
         color_aux  = _theme.c("COLOR_AUX")
         color_hdmi = _theme.c("COLOR_HDMI")
-        color_master = MASTER_COLOR
+        color_master = _theme.c("COLOR_MASTER")
 
         # Update each card's accent and restyle
         self._game_card._accent = color_game
         self._chat_card._accent = color_chat
         self._media_card._accent = color_aux
+        self._aux_card._accent = _theme.c("COLOR_AUX2")
         self._ext_card._accent = color_hdmi
         self._master_card._accent = color_master
 
         for card in (self._game_card, self._chat_card, self._media_card,
-                     self._master_card, self._ext_card):
+                     self._aux_card, self._master_card, self._ext_card):
             card.apply_theme(t)
+
+        # The ChatMix bar's fill mirrors the channel sliders' colours (#269)
+        if hasattr(self, "_chatmix_bar"):
+            try:
+                from arctis_sound_manager.settings import GeneralSettings
+                channels = set(GeneralSettings.read_from_file().chatmix_channels_or_default())
+            except Exception:  # noqa: BLE001
+                channels = {"game"}
+            self._refresh_chatmix_bar_label(channels)
 
         # Update _AppTag registry with fresh accent colors
         _AppTag._cards_registry = [
@@ -1562,23 +1705,6 @@ class HomePage(QWidget):
         ]
 
         self._style_unassigned()
-
-        # Update channel-name labels in cards
-        self._game_card._name_lbl.setStyleSheet(
-            f"color: {color_game}; font-size: 14pt; font-weight: normal; background: transparent;"
-        )
-        self._chat_card._name_lbl.setStyleSheet(
-            f"color: {color_chat}; font-size: 14pt; font-weight: normal; background: transparent;"
-        )
-        self._media_card._name_lbl.setStyleSheet(
-            f"color: {color_aux}; font-size: 14pt; font-weight: normal; background: transparent;"
-        )
-        self._ext_card._name_lbl.setStyleSheet(
-            f"color: {color_hdmi}; font-size: 14pt; font-weight: normal; background: transparent;"
-        )
-        self._master_card._name_lbl.setStyleSheet(
-            f"color: {color_master}; font-size: 14pt; font-weight: normal; background: transparent;"
-        )
 
     # ── Toggle handler ─────────────────────────────────────────────────────────
 
@@ -2224,8 +2350,8 @@ class HomePage(QWidget):
         if card._app_sig == signature:
             return
         card.clear_apps()
-        for app_name, si_index, pid in rows:
-            card.add_app_tag(app_name, si_index, pid, bg_color=card._accent)
+        for app_name, si_index, pid, hint in rows:
+            card.add_app_tag(app_name, si_index, pid, bg_color=card._accent, hint=hint)
         # After the rebuild, not before: clear_apps() resets the signature, so
         # setting it first threw it away and rebuilt on every tick.
         card._app_sig = signature
@@ -2251,7 +2377,7 @@ class HomePage(QWidget):
             if si.sink in sink_indices and "application.name" in si.proplist
         ]
 
-        rows: list[tuple[str, int, int]] = []
+        rows: list[tuple[str, int, int, tuple]] = []
         seen_names: set[str] = set()
         for si in matching:
             app_name = self._friendly_app_name(si.proplist)
@@ -2259,10 +2385,10 @@ class HomePage(QWidget):
                 continue
             seen_names.add(app_name)
             rows.append((app_name, si.index,
-                         int(si.proplist.get("application.process.id", 0))))
+                         int(si.proplist.get("application.process.id", 0)),
+                         icon_hint(si.proplist)))
 
         return rows
-        card._app_sig = signature
 
     def _style_unassigned(self) -> None:
         """Header styling, kept flat and quiet: this is a list, not an alert."""
@@ -2346,6 +2472,7 @@ class HomePage(QWidget):
                 "where": descs.get(si.sink, names.get(si.sink, "?")),
                 "si_index": si.index,
                 "pid": int(props.get("application.process.id", 0) or 0),
+                "hint": icon_hint(props),
             })
         return rows
 
@@ -2392,7 +2519,7 @@ class HomePage(QWidget):
                 I18n.translate("ui", "unassigned_playing_on").format(device=row["where"]),
                 row["si_index"], row["pid"],
                 (lambda k=row["key"]: self._on_dismiss_app(k)),
-                primary, muted,
+                primary, muted, row["hint"],
             ))
 
     def _on_unassigned_toggle(self) -> None:
@@ -2469,7 +2596,8 @@ class HomePage(QWidget):
             if card is None:
                 continue
             per_card.setdefault(id(card), []).append(
-                (s["app_name"], s["id"], int(s["pid"] or 0)))
+                (s["app_name"], s["id"], int(s["pid"] or 0),
+                 icon_hint(s.get("props", {}))))
         return per_card
 
     def _refresh_eq_presets(self):
@@ -2489,6 +2617,12 @@ class HomePage(QWidget):
                 # No active-preset file yet means Flat, as on the Equalizer page.
                 get_sonar_active_preset(channel) or "Flat",
             )
+
+    def set_output_pickers(self, pickers: dict) -> None:
+        """Give each card the Equalizer page's output selector for its channel,
+        keyed like _preset_cards; see AudioCard.set_output_picker."""
+        for channel, card in self._preset_cards.items():
+            card.set_output_picker(pickers.get(channel))
 
     def _on_eq_preset_chosen(self, channel: str, name: str):
         applier = self._preset_appliers[channel]

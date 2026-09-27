@@ -140,6 +140,24 @@ class ChannelOutputSelector(QWidget):
         set_channel_output(self._channel, device_id or None)
         self.target_changed.emit(device_id)
 
+    # ── API for the Channels page card button ─────────────────────────────────
+
+    def options(self) -> list[tuple[str, str]]:
+        """(device id, label) pairs this picker offers right now."""
+        self.refresh()
+        return list(self._devices)
+
+    def current_id(self) -> str | None:
+        return self._current
+
+    def pick(self, device_id: str) -> None:
+        """Choose *device_id* exactly as if it were picked in the combo."""
+        index = self._combo.findData(device_id)
+        if index < 0:
+            return
+        self._select(device_id)
+        self._on_picked(index)
+
     def apply_theme(self, t=None) -> None:
         self._label.setStyleSheet(
             f"color: {_theme.c('TEXT_SECONDARY')}; background: transparent;")

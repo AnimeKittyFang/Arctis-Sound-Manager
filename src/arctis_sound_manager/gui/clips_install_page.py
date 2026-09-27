@@ -155,24 +155,14 @@ class ClipsInstallPage(QWidget):
 
         self._install_btn = QPushButton(_tr("clips_install", "Install"))
         self._install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._install_btn.setStyleSheet(
-            f"QPushButton {{ background: {_theme.c('ACCENT')}; color: #fff; border: none;"
-            f" border-radius: 6px; padding: 8px 20px; font-size: 11pt; font-weight: bold; }}"
-            f"QPushButton:hover {{ background: {_theme.c('BG_BUTTON_HOVER')}; }}"
-            f"QPushButton:disabled {{ background: {_theme.c('BORDER')}; color: {_theme.c('TEXT_SECONDARY')}; }}"
-        )
         self._install_btn.clicked.connect(self._on_install)
         actions.addWidget(self._install_btn)
 
         self._recheck_btn = QPushButton(_tr("clips_install_recheck", "I've installed it"))
         self._recheck_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._recheck_btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; color: {_theme.c('TEXT_SECONDARY')};"
-            f" border: 1px solid {_theme.c('BORDER')}; border-radius: 6px; padding: 8px 16px; font-size: 10pt; }}"
-            f"QPushButton:hover {{ border-color: {_theme.c('ACCENT')}; color: {_theme.c('TEXT_PRIMARY')}; }}"
-        )
         self._recheck_btn.clicked.connect(self._on_recheck)
         actions.addWidget(self._recheck_btn)
+        self._style_buttons()
 
         actions.addStretch(1)
 
@@ -357,10 +347,24 @@ class ClipsInstallPage(QWidget):
                                  "✓ Installed. Opening the recorder…"))
         self.clips_installed.emit()
 
+    def _style_buttons(self) -> None:
+        self._install_btn.setStyleSheet(
+            f"QPushButton {{ background: {_theme.c('ACCENT')}; color: #fff; border: none;"
+            f" border-radius: 6px; padding: 8px 20px; font-size: 11pt; font-weight: bold; }}"
+            f"QPushButton:hover {{ background: {_theme.c('BG_BUTTON_HOVER')}; }}"
+            f"QPushButton:disabled {{ background: {_theme.c('BORDER')}; color: {_theme.c('TEXT_SECONDARY')}; }}"
+        )
+        self._recheck_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {_theme.c('TEXT_SECONDARY')};"
+            f" border: 1px solid {_theme.c('BORDER')}; border-radius: 6px; padding: 8px 16px; font-size: 10pt; }}"
+            f"QPushButton:hover {{ border-color: {_theme.c('ACCENT')}; color: {_theme.c('TEXT_PRIMARY')}; }}"
+        )
+
     def apply_theme(self, t=None) -> None:
         """Repaint after a theme change (called by main_app). The rows and the
         manual-command field carry inline colors, so rebuild them from the
         active theme; the static labels restyle on their own."""
+        self._style_buttons()
         try:
             self._refresh()
         except Exception:  # noqa: BLE001

@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -30,6 +29,7 @@ from PySide6.QtWidgets import (
 from arctis_sound_manager import service_control as sc
 from arctis_sound_manager.gui.sonar_page import SonarPage
 from arctis_sound_manager.gui.dbus_wrapper import DbusWrapper
+from arctis_sound_manager.gui.fader_slider import CAP_H, FADER_HANDLE_QSS, FaderSlider
 from arctis_sound_manager.i18n import I18n
 from arctis_sound_manager.sonar_to_pipewire import ensure_sonar_eq_configs
 import arctis_sound_manager.gui.theme as _theme
@@ -72,7 +72,7 @@ _SONAR_OFF = {v: k for k, v in _SONAR_ON.items()}
 
 # Slider geometry constants (shared by _TickSlider and _ScaleWidget)
 SLIDER_H   = 220
-SLIDER_M   = 8    # top/bottom margin inside slider
+SLIDER_M   = CAP_H // 2  # top/bottom margin inside slider = half the fader cap
 FREQ_LBL_H = 24   # approx height of frequency label + spacing
 VAL_LBL_H  = 26   # approx height of value lineedit + spacing
 
@@ -369,7 +369,7 @@ class _ToggleWorker(QThread):
 
 # ── Slider with painted tick marks and color bar ──────────────────────────────
 
-class _TickSlider(QSlider):
+class _TickSlider(FaderSlider):
     GROOVE_WIDTH = 6
     TICK_SHORT   = 5
     TICK_LONG    = 12
@@ -378,9 +378,7 @@ class _TickSlider(QSlider):
     COLOR_POS    = QColor("#FF6600")
     COLOR_NEG    = QColor("#00AAFF")
 
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        painter = QPainter(self)
+    def paint_under_cap(self, painter: QPainter) -> None:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
         total   = self.maximum() - self.minimum()
@@ -417,8 +415,6 @@ class _TickSlider(QSlider):
             half_g = self.GROOVE_WIDTH // 2 + 2
             painter.drawLine(cx - half_g - length, y, cx - half_g, y)
             painter.drawLine(cx + half_g,           y, cx + half_g + length, y)
-
-        painter.end()
 
 
 # ── dB scale labels (left or right of sliders) ───────────────────────────────
@@ -497,16 +493,9 @@ class _EqSlider(QWidget):
                 width: 6px;
                 border-radius: 3px;
             }}
-            QSlider::handle:vertical {{
-                background: white;
-                width: 16px;
-                height: 16px;
-                margin: 0 -5px;
-                border-radius: 8px;
-            }}
             QSlider::sub-page:vertical {{ background: transparent; }}
             QSlider::add-page:vertical  {{ background: transparent; }}
-        """)
+        """ + FADER_HANDLE_QSS)
         self._slider.valueChanged.connect(self._on_value_changed)
         layout.addWidget(self._slider, alignment=Qt.AlignmentFlag.AlignHCenter)
 

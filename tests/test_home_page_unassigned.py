@@ -173,7 +173,7 @@ class _FakeCard:
         self.tags = []
         self._app_sig = None
 
-    def add_app_tag(self, name, si_index, pid, bg_color=""):
+    def add_app_tag(self, name, si_index, pid, bg_color="", hint=("", "", "")):
         self.tags.append((name, si_index, pid))
 
 
@@ -239,10 +239,10 @@ def test_a_native_stream_is_not_added_once_per_tick():
     from arctis_sound_manager.gui.home_page import HomePage
 
     card = _FakeCard()
-    native = [("RocketLeague.exe", 42, 1234)]
+    native = [("RocketLeague.exe", 42, 1234, ("", "", ""))]
 
     for _ in range(6):
         HomePage._apply_app_rows(HomePage, card, list(native))
 
-    assert card.tags == native
+    assert card.tags == [("RocketLeague.exe", 42, 1234)]
     assert card.cleared == 1

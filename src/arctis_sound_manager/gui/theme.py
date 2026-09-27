@@ -15,6 +15,8 @@ THEMES = {
         "ACCENT": "#FB4A00", "ACCENT2": "#FB4A00",
         "TEXT_PRIMARY": "#C8C8C8", "TEXT_SECONDARY": "#8D96AA", "BORDER": "#2A3038",
         "COLOR_GAME": "#04C5A8", "COLOR_CHAT": "#2791CE", "COLOR_AUX": "#FB4A00", "COLOR_HDMI": "#9B59B6", "COLOR_AUX2": "#E4B53C",
+        "TOGGLE_ON": "#FB4A00", "TOGGLE_OFF": "#2D363E",
+        "COLOR_MASTER": "#9E9E9E",
     },
     "aurora": {
         "BG_MAIN": "#0d0d1f", "BG_SIDEBAR": "#0a0a1a", "BG_CARD": "#121224",
@@ -22,6 +24,8 @@ THEMES = {
         "ACCENT": "#7B2FFF", "ACCENT2": "#00D4FF",
         "TEXT_PRIMARY": "#E0DEFF", "TEXT_SECONDARY": "#6060AA", "BORDER": "#2a2050",
         "COLOR_GAME": "#7B2FFF", "COLOR_CHAT": "#00D4FF", "COLOR_AUX": "#f472b6", "COLOR_HDMI": "#34d399", "COLOR_AUX2": "#facc15",
+        "TOGGLE_ON": "#7B2FFF", "TOGGLE_OFF": "#1a1a3a",
+        "COLOR_MASTER": "#9E9E9E",
     },
     "neon": {
         "BG_MAIN": "#07070f", "BG_SIDEBAR": "#050508", "BG_CARD": "#0b0b15",
@@ -29,6 +33,8 @@ THEMES = {
         "ACCENT": "#00ffcc", "ACCENT2": "#ff00aa",
         "TEXT_PRIMARY": "#C8FFF0", "TEXT_SECONDARY": "#2a6655", "BORDER": "#0a2a20",
         "COLOR_GAME": "#00ffcc", "COLOR_CHAT": "#ff00aa", "COLOR_AUX": "#ff6600", "COLOR_HDMI": "#9b59b6", "COLOR_AUX2": "#ffe600",
+        "TOGGLE_ON": "#00ffcc", "TOGGLE_OFF": "#0f0f1e",
+        "COLOR_MASTER": "#9E9E9E",
     },
     "premium": {
         "BG_MAIN": "#131a24", "BG_SIDEBAR": "#0f1520", "BG_CARD": "#18202c",
@@ -36,6 +42,8 @@ THEMES = {
         "ACCENT": "#F59E0B", "ACCENT2": "#EF4444",
         "TEXT_PRIMARY": "#F0EDE8", "TEXT_SECONDARY": "#5a6880", "BORDER": "#2a3040",
         "COLOR_GAME": "#F59E0B", "COLOR_CHAT": "#EF4444", "COLOR_AUX": "#3b82f6", "COLOR_HDMI": "#8b5cf6", "COLOR_AUX2": "#10b981",
+        "TOGGLE_ON": "#F59E0B", "TOGGLE_OFF": "#1e2938",
+        "COLOR_MASTER": "#9E9E9E",
     },
     "arctic": {
         "BG_MAIN": "#111d2c", "BG_SIDEBAR": "#0c1825", "BG_CARD": "#162030",
@@ -43,6 +51,17 @@ THEMES = {
         "ACCENT": "#4cc9f0", "ACCENT2": "#1d6fa4",
         "TEXT_PRIMARY": "#D8EFF8", "TEXT_SECONDARY": "#3d6080", "BORDER": "#1a3050",
         "COLOR_GAME": "#4cc9f0", "COLOR_CHAT": "#0ea5e9", "COLOR_AUX": "#06b6d4", "COLOR_HDMI": "#6366f1", "COLOR_AUX2": "#a78bfa",
+        "TOGGLE_ON": "#4cc9f0", "TOGGLE_OFF": "#1c2d40",
+        "COLOR_MASTER": "#9E9E9E",
+    },
+    "matcha_sv": {
+        "BG_MAIN": "#141a16", "BG_SIDEBAR": "#0f1411", "BG_CARD": "#1a221c",
+        "BG_BUTTON": "#243028", "BG_BUTTON_HOVER": "#2e3d33", "BG_SIDEBAR_ACTIVE": "#1f2e24",
+        "ACCENT": "#8fbf5a", "ACCENT2": "#c3dd9a",
+        "TEXT_PRIMARY": "#f1ecdf", "TEXT_SECONDARY": "#7d8f7f", "BORDER": "#2a372d",
+        "COLOR_GAME": "#8fbf5a", "COLOR_CHAT": "#e8a0a8", "COLOR_AUX": "#d9b779", "COLOR_HDMI": "#7fb7a4", "COLOR_AUX2": "#b39ddb",
+        "TOGGLE_ON": "#8fbf5a", "TOGGLE_OFF": "#243028",
+        "COLOR_MASTER": "#b8b2a2",
     },
 }
 
@@ -52,13 +71,15 @@ THEMES_LABELS = {
     "neon": "Neon Pulse",
     "premium": "Slate Premium",
     "arctic": "Arctic",
+    "matcha_sv": "Matcha SV",
 }
 
 THEME_KEYS: tuple[str, ...] = (
     "BG_MAIN", "BG_SIDEBAR", "BG_CARD", "BG_BUTTON", "BG_BUTTON_HOVER",
     "BG_SIDEBAR_ACTIVE", "ACCENT", "ACCENT2", "TEXT_PRIMARY",
     "TEXT_SECONDARY", "BORDER", "COLOR_GAME", "COLOR_CHAT",
-    "COLOR_AUX", "COLOR_HDMI", "COLOR_AUX2",
+    "COLOR_AUX", "COLOR_HDMI", "COLOR_AUX2", "TOGGLE_ON", "TOGGLE_OFF",
+    "COLOR_MASTER",
 )
 
 # Colours added after the share format shipped. A link written before they
@@ -66,15 +87,30 @@ THEME_KEYS: tuple[str, ...] = (
 # instead of refusing the import — while a link missing one of the original
 # keys is still rejected, because that means it is truncated or corrupt rather
 # than merely older. Anything added here in future goes in this set too.
-THEME_KEYS_OPTIONAL: frozenset[str] = frozenset({"COLOR_AUX2"})
+THEME_KEYS_OPTIONAL: frozenset[str] = frozenset({"COLOR_AUX2", "TOGGLE_ON", "TOGGLE_OFF",
+                                                "COLOR_MASTER"})
+
+# Optional colours that are better derived from the theme's own palette than
+# taken from the default one: a theme made before the toggle colours existed
+# keeps the switches it always had (accent when on, button background off).
+DERIVED_DEFAULTS: dict[str, str] = {"TOGGLE_ON": "ACCENT", "TOGGLE_OFF": "BG_BUTTON"}
+
+
+def default_for(key: str, colors: dict[str, str]) -> str:
+    """Fallback for an optional *key* missing from *colors*."""
+    source = DERIVED_DEFAULTS.get(key)
+    if source and source in colors:
+        return colors[source]
+    return THEMES["steelseries"].get(key, "#000000")
 
 THEME_GROUPS: dict[str, tuple[str, ...]] = {
     "theme_group_backgrounds": ("BG_MAIN", "BG_SIDEBAR", "BG_CARD", "BG_BUTTON",
                                 "BG_BUTTON_HOVER", "BG_SIDEBAR_ACTIVE"),
     "theme_group_accents":     ("ACCENT", "ACCENT2", "BORDER"),
     "theme_group_text":        ("TEXT_PRIMARY", "TEXT_SECONDARY"),
-    "theme_group_channels":    ("COLOR_GAME", "COLOR_CHAT", "COLOR_AUX",
+    "theme_group_channels":    ("COLOR_MASTER", "COLOR_GAME", "COLOR_CHAT", "COLOR_AUX",
                                 "COLOR_AUX2", "COLOR_HDMI"),
+    "theme_group_toggles":     ("TOGGLE_ON", "TOGGLE_OFF"),
 }
 
 COLOR_LABEL_KEYS: dict[str, str] = {
@@ -88,6 +124,8 @@ COLOR_LABEL_KEYS: dict[str, str] = {
     "COLOR_GAME": "theme_color_game", "COLOR_CHAT": "theme_color_chat",
     "COLOR_AUX": "theme_color_aux", "COLOR_HDMI": "theme_color_hdmi",
     "COLOR_AUX2": "theme_color_aux2",
+    "TOGGLE_ON": "theme_color_toggle_on", "TOGGLE_OFF": "theme_color_toggle_off",
+    "COLOR_MASTER": "theme_color_master",
 }
 
 USER_THEMES_DIR = Path(os.environ.get('XDG_CONFIG_HOME') or (Path.home() / '.config')) / "arctis-sound-manager" / "themes"
@@ -131,8 +169,8 @@ def reload_user_themes() -> None:
                 label = parser.get("theme", "name", fallback=tid)
                 colors: dict[str, str] = {}
                 for key in THEME_KEYS:
-                    val = parser.get("colors", key, fallback=THEMES["steelseries"].get(key, "#000000"))
-                    colors[key] = val if _validate_color(val) else THEMES["steelseries"].get(key, "#000000")
+                    val = parser.get("colors", key, fallback="")
+                    colors[key] = val if _validate_color(val) else default_for(key, colors)
                 _USER_THEMES[tid] = colors
                 _USER_LABELS[tid] = label
             except Exception:
@@ -227,6 +265,9 @@ def import_theme_from_file(src: Path) -> str:
     colors: dict[str, str] = {}
     for key in THEME_KEYS:
         val = parser.get("colors", key, fallback="")
+        if not val and key in THEME_KEYS_OPTIONAL:
+            colors[key] = default_for(key, colors)
+            continue
         if not _validate_color(val):
             raise ValueError(f"Invalid or missing color for {key}")
         colors[key] = val
@@ -273,6 +314,29 @@ COLOR_AUX        = THEMES["steelseries"]["COLOR_AUX"]
 COLOR_HDMI       = THEMES["steelseries"]["COLOR_HDMI"]
 
 
+def _chevron_icon(color: str, up: bool) -> str:
+    """Path to a chevron SVG in *color*, for QComboBox::down-arrow.
+
+    QSS can only load arrow images from a file, so one small SVG per colour is
+    written to the user cache the first time a theme asks for it.
+    """
+    points = "2,8 6,4 10,8" if up else "2,4 6,8 10,4"
+    name = f"chevron-{'up' if up else 'down'}-{color.lstrip('#').lower()}.svg"
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    path = cache / "arctis_sound_manager" / name
+    if not path.exists():
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12">'
+                f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="1.8" '
+                'stroke-linecap="round" stroke-linejoin="round"/></svg>',
+                encoding="utf-8")
+        except OSError as exc:
+            logging.getLogger(__name__).debug("chevron icon not written: %s", exc)
+    return path.as_posix()
+
+
 def build_qss(theme_name: str) -> str:
     """Generate the full application QSS for the given theme name."""
     t = get_theme(theme_name)
@@ -288,6 +352,8 @@ def build_qss(theme_name: str) -> str:
     TEXT_PRIMARY_    = t["TEXT_PRIMARY"]
     TEXT_SECONDARY_  = t["TEXT_SECONDARY"]
     BORDER_          = t["BORDER"]
+    chevron_down     = _chevron_icon(TEXT_SECONDARY_, up=False)
+    chevron_up       = _chevron_icon(ACCENT_, up=True)
 
     # Gradient or solid for accent buttons / slider sub-pages
     if ACCENT_ != ACCENT2_:
@@ -455,28 +521,56 @@ QPushButton#themeChip[active=true] {{
 QComboBox {{
     background-color: {BG_BUTTON_};
     color: {TEXT_PRIMARY_};
-    border: 1px solid {BORDER_};
-    border-radius: 6px;
-    padding: 4px 10px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 5px 30px 5px 12px;
     min-width: 120px;
+    combobox-popup: 0;
 }}
 QComboBox:hover {{
+    background-color: {BG_BUTTON_HOVER_};
+    border-color: {BORDER_};
+}}
+QComboBox:focus, QComboBox:on {{
     border-color: {ACCENT_};
+}}
+QComboBox:disabled {{
+    color: {TEXT_SECONDARY_};
 }}
 QComboBox::drop-down {{
     subcontrol-origin: padding;
-    subcontrol-position: top right;
-    width: 24px;
-    border-left: 1px solid {BORDER_};
-    border-top-right-radius: 6px;
-    border-bottom-right-radius: 6px;
+    subcontrol-position: center right;
+    width: 26px;
+    border: none;
+    background: transparent;
+}}
+QComboBox::down-arrow {{
+    image: url({chevron_down});
+    width: 10px;
+    height: 10px;
+}}
+QComboBox::down-arrow:on {{
+    image: url({chevron_up});
 }}
 QComboBox QAbstractItemView {{
     background-color: {BG_CARD_};
     color: {TEXT_PRIMARY_};
     border: 1px solid {BORDER_};
-    selection-background-color: {ACCENT_};
-    selection-color: {TEXT_PRIMARY_};
+    border-radius: 8px;
+    padding: 4px;
+    outline: 0;
+}}
+QComboBox QAbstractItemView::item {{
+    min-height: 26px;
+    padding: 2px 10px;
+    border-radius: 6px;
+}}
+QComboBox QAbstractItemView::item:hover {{
+    background-color: {BG_BUTTON_HOVER_};
+}}
+QComboBox QAbstractItemView::item:selected {{
+    background-color: {BG_SIDEBAR_ACT_};
+    color: {ACCENT_};
 }}
 
 /* ── Sliders (horizontal) ── */

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 from threading import Lock
-from typing import Callable
+from typing import Callable, Iterable
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QPushButton,
@@ -27,6 +27,39 @@ _REFRESHABLE_OPTION_SOURCES = frozenset({
     # can be plugged or unplugged at any time (issue #199).
     'connected_arctis_devices',
 })
+
+
+def _button_group_qss() -> str:
+    """Segmented buttons of a BUTTON_GROUP setting: a multi-way switch, so it
+    takes the theme's toggle colours (TOGGLE_ON selected, TOGGLE_OFF the rest)."""
+    return f"""
+        QPushButton {{
+            background-color: {_theme.c('TOGGLE_OFF')};
+            color: {_theme.c('TEXT_SECONDARY')};
+            border: 1px solid {_theme.c('BG_BUTTON_HOVER')};
+            border-radius: 6px;
+            padding: 5px 12px;
+            font-size: 10pt;
+        }}
+        QPushButton[active=true] {{
+            background-color: {_theme.c('TOGGLE_ON')};
+            color: #FFFFFF;
+            border: 1px solid {_theme.c('TOGGLE_ON')};
+        }}
+        QPushButton:hover {{
+            background-color: {_theme.c('BG_BUTTON_HOVER')};
+            color: {_theme.c('TEXT_PRIMARY')};
+        }}
+        QPushButton[active=true]:hover {{
+            background-color: {_theme.c('TOGGLE_ON')};
+            opacity: 0.85;
+        }}
+        QPushButton:disabled {{
+            background-color: {_theme.c('TOGGLE_OFF')};
+            color: {_theme.c('TEXT_SECONDARY')};
+            border: 1px dashed {_theme.c('BORDER')};
+        }}
+    """
 
 
 def _option_label(option: dict) -> str:
@@ -58,8 +91,15 @@ class QSettingsWidget(QWidget):
     settings: dict[str, int|bool|str]
     settings_config: dict[str, ConfigSetting]
 
-    def __init__(self, parent: QWidget, i18n_section_name: str, dbus_settings_section: str):
+    def __init__(self, parent: QWidget, i18n_section_name: str | None, dbus_settings_section: str,
+                 keys: Iterable[str] | None = None, exclude: Iterable[str] = ()):
+        """*keys* limits the panel to those settings, shown in that order;
+        *exclude* drops settings from it. A D-Bus section can so be split over
+        several panels, one per group of related settings. No
+        *i18n_section_name* means no title: the page supplies its own."""
         super().__init__(parent)
+        self._keys: list[str] | None = list(keys) if keys is not None else None
+        self._exclude = frozenset(exclude)
 
         layout = QVBoxLayout()
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -70,20 +110,20 @@ class QSettingsWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(layout)
 
-        title = I18n.get_instance().translate('ui', i18n_section_name)
-        title_widget = QLabel(title)
-        title_font = title_widget.font()
-        title_font.setBold(True)
-        title_font.setPointSize(16)
-        title_widget.setFont(title_font)
-        layout.addWidget(title_widget)
+        if i18n_section_name:
+            title_widget = QLabel(I18n.get_instance().translate('ui', i18n_section_name))
+            title_font = title_widget.font()
+            title_font.setBold(True)
+            title_font.setPointSize(16)
+            title_widget.setFont(title_font)
+            layout.addWidget(title_widget)
 
         self.main_layout = QVBoxLayout()
         self.main_layout.setSpacing(3)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         layout.addLayout(self.main_layout)
 
-        self.title = I18n.get_instance().translate('ui', i18n_section_name)
+        self.title = I18n.get_instance().translate('ui', i18n_section_name) if i18n_section_name else ''
         self.dbus_settings_section = dbus_settings_section
         self.settings = {}
         self._settings_widgets: dict[str, QWidget] = {}
@@ -100,6 +140,25 @@ class QSettingsWidget(QWidget):
         self.sig_list_received.connect(self.on_options_list_received)
 
         self.refresh_lock = Lock()
+
+    def _in_scope(self, name: str) -> bool:
+        if name in self._exclude:
+            return False
+        return self._keys is None or name in self._keys
+
+    def _ordered_settings(self):
+        if self._keys is None:
+            return [(k, v) for k, v in self.settings.items() if k not in self._exclude]
+        return [(k, self.settings[k]) for k in self._keys if k in self.settings]
+
+    def apply_theme(self, t=None) -> None:
+        """Restyle after a theme change, in place: rebuilding the rows through
+        refresh_panel() would re-read toggle states from self.settings, which
+        holds booleans rather than the profile's on/off values."""
+        qss = _button_group_qss()
+        for btn in self.findChildren(QPushButton):
+            if btn.property('active') is not None:
+                btn.setStyleSheet(qss)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -222,7 +281,7 @@ class QSettingsWidget(QWidget):
                 del self._settings_widgets[key]
 
             # Mapp all the settings
-            for name, value in self.settings.items():
+            for name, value in self._ordered_settings():
                 if not name in self._settings_widgets:
                     config = self.settings_config.get(name)
                     if config is None or getattr(config, 'hidden', False) or config.type is None:
@@ -240,6 +299,8 @@ class QSettingsWidget(QWidget):
     def update_settings(self, new_settings: dict):
         self.settings_config = {}
         for config_name, kwargs in new_settings.get('settings_config', {}).items():
+            if not self._in_scope(config_name):
+                continue
             self.settings_config[config_name] = ConfigSetting(name=config_name, **kwargs)
             if self.settings_config[config_name].type == SettingType.SELECT \
                 and self.settings_config[config_name].options_source not in self._option_lists:
@@ -282,6 +343,7 @@ class QSettingsWidget(QWidget):
                 off_text=I18n.get_instance().translate('settings_values', config.values.get('off_label', 'off')),
                 on_text=I18n.get_instance().translate('settings_values', config.values.get('on_label', 'on')),
                 init_state='right' if value == config.values.get('on', True) else 'left',
+                accent=(config.values.get('off_label', 'off'), config.values.get('on_label', 'on')) == ('off', 'on'),
             )
             widget.checkStateChanged.connect(lambda state: callback(config, state == Qt.CheckState.Checked))
         elif config.type == SettingType.SLIDER:
@@ -320,34 +382,6 @@ class QSettingsWidget(QWidget):
             widget_layout.setSpacing(4)
             widget.setLayout(widget_layout)
 
-            btn_qss = f"""
-                QPushButton {{
-                    background-color: {_theme.c('BG_BUTTON')};
-                    color: {_theme.c('TEXT_SECONDARY')};
-                    border: 1px solid {_theme.c('BG_BUTTON_HOVER')};
-                    border-radius: 6px;
-                    padding: 5px 12px;
-                    font-size: 10pt;
-                }}
-                QPushButton[active=true] {{
-                    background-color: {_theme.c('ACCENT')};
-                    color: #FFFFFF;
-                    border: 1px solid {_theme.c('ACCENT')};
-                }}
-                QPushButton:hover {{
-                    background-color: {_theme.c('BG_BUTTON_HOVER')};
-                    color: {_theme.c('TEXT_PRIMARY')};
-                }}
-                QPushButton[active=true]:hover {{
-                    background-color: {_theme.c('ACCENT')};
-                    opacity: 0.85;
-                }}
-                QPushButton:disabled {{
-                    background-color: {_theme.c('BG_BUTTON')};
-                    color: {_theme.c('TEXT_SECONDARY')};
-                    border: 1px dashed {_theme.c('BORDER')};
-                }}
-            """
 
             values_mapping: dict = getattr(config, 'values_mapping', {})
 
@@ -362,7 +396,7 @@ class QSettingsWidget(QWidget):
                 label = I18n.get_instance().translate('settings_values', label_key)
                 btn = QPushButton(label)
                 btn.setProperty('active', btn_value == current_value)
-                btn.setStyleSheet(btn_qss)
+                btn.setStyleSheet(_button_group_qss())
                 # Grey out (never hide) an option the active device profile can
                 # never make do anything — e.g. micro_autoswitch's "mute"
                 # trigger on a headset whose profile doesn't map mic_status

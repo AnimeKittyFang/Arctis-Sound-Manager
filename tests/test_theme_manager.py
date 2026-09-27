@@ -49,6 +49,9 @@ def valid_colors() -> dict[str, str]:
         "COLOR_AUX":        "#FF8800",
         "COLOR_AUX2":       "#FFD166",
         "COLOR_HDMI":       "#BB44FF",
+        "TOGGLE_ON":        "#FF6B6B",
+        "TOGGLE_OFF":       "#2B2B4B",
+        "COLOR_MASTER":     "#9E9E9E",
     }
     assert set(base.keys()) == set(THEME_KEYS), "Fixture must cover all THEME_KEYS"
     return base
@@ -290,6 +293,9 @@ def test_partial_ini_falls_back_to_steelseries_colors(isolated_themes, tmp_path)
     assert "partial" in theme_mod._USER_THEMES
     # Missing key falls back to steelseries default
     assert theme_mod._USER_THEMES["partial"]["COLOR_HDMI"] == THEMES["steelseries"]["COLOR_HDMI"]
+    # Toggle colours are derived from the theme's own palette instead
+    assert theme_mod._USER_THEMES["partial"]["TOGGLE_ON"] == "#777777"
+    assert theme_mod._USER_THEMES["partial"]["TOGGLE_OFF"] == "#444444"
 
 
 # ── no Qt import guard ────────────────────────────────────────────────────────

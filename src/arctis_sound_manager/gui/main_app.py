@@ -166,6 +166,17 @@ class QMainApp(QBaseDesktopApp):
         self._home_page.sig_eq_preset_applied.connect(
             self._equalizer_page._sonar_page.notify_external_preset_change)
 
+        # The cards' output buttons drive the Equalizer page's own selectors,
+        # so a device picked on either page shows on both
+        sonar = self._equalizer_page._sonar_page
+        self._home_page.set_output_pickers({
+            "game": sonar._game_output_selector,
+            "chat": sonar._chat_output_selector,
+            "media": sonar._media_output_selector,
+            "aux": sonar._aux_output_selector,
+            "output": sonar._output_selector,
+        })
+
         self.destroyed.connect(self.sig_stop)
         self.main_window.visibilityChanged.connect(self._on_visibility_changed)
 
@@ -188,6 +199,7 @@ class QMainApp(QBaseDesktopApp):
             self._device_page,
             self._help_page,
             self._theme_editor_page,
+            getattr(self, "_clips_page", None),
         ):
             if hasattr(page, "apply_theme"):
                 page.apply_theme(t)

@@ -116,8 +116,8 @@ class DacPage(QWidget):
 
         self._station_widget = QSettingsWidget(content, "station_settings", "device")
         self._station_widget.setStyleSheet(f"""
-            QWidget {{ background-color: {BG_MAIN}; color: {TEXT_PRIMARY}; }}
-            QLabel {{ background-color: transparent; color: {TEXT_PRIMARY}; font-size: 11pt; }}
+            QWidget {{ background-color: {_theme.c('BG_MAIN')}; color: {_theme.c('TEXT_PRIMARY')}; }}
+            QLabel {{ background-color: transparent; color: {_theme.c('TEXT_PRIMARY')}; font-size: 11pt; }}
         """)
         self._station_widget.setVisible(False)
         layout.addWidget(self._station_widget)
@@ -131,8 +131,8 @@ class DacPage(QWidget):
         # ── Brightness / Timeout sliders ───────────────────────────────────────
         self._dac_widget = QSettingsWidget(content, "dac_settings", "dac")
         self._dac_widget.setStyleSheet(f"""
-            QWidget {{ background-color: {BG_MAIN}; color: {TEXT_PRIMARY}; }}
-            QLabel {{ background-color: transparent; color: {TEXT_PRIMARY}; font-size: 11pt; }}
+            QWidget {{ background-color: {_theme.c('BG_MAIN')}; color: {_theme.c('TEXT_PRIMARY')}; }}
+            QLabel {{ background-color: transparent; color: {_theme.c('TEXT_PRIMARY')}; font-size: 11pt; }}
         """)
         layout.addWidget(self._dac_widget)
         layout.addSpacing(24)
@@ -237,12 +237,16 @@ class DacPage(QWidget):
         if hasattr(self, "_custom_display_hint"):
             self._custom_display_hint.setStyleSheet(_hint_style)
 
-        # DAC settings widget background
-        if hasattr(self, "_dac_widget"):
-            self._dac_widget.setStyleSheet(f"""
+        # Station + DAC settings widgets: background and option buttons
+        for name in ("_station_widget", "_dac_widget"):
+            widget = getattr(self, name, None)
+            if widget is None:
+                continue
+            widget.setStyleSheet(f"""
                 QWidget {{ background-color: {_theme.c('BG_MAIN')}; color: {_theme.c('TEXT_PRIMARY')}; }}
                 QLabel {{ background-color: transparent; color: {_theme.c('TEXT_PRIMARY')}; font-size: 11pt; }}
             """)
+            widget.apply_theme()
 
         # Weather status label
         if hasattr(self, "_weather_status"):

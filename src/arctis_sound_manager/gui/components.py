@@ -37,16 +37,44 @@ HOME_ICON = os.path.join(IMAGES_DIR, "home_icon.svg")
 SETTINGS_ICON = os.path.join(IMAGES_DIR, "settings_icon.svg")
 HEADPHONE_ICON = os.path.join(IMAGES_DIR, "headphone_icon.svg")
 EQUALIZER_ICON = os.path.join(IMAGES_DIR, "equalizer_icon.svg")
+OUTPUT_ICON = os.path.join(IMAGES_DIR, "output_icon.svg")
 HELP_ICON = os.path.join(IMAGES_DIR, "help_icon.svg")
 GAME_ICON = os.path.join(IMAGES_DIR, "game_icon.svg")
 CHAT_ICON = os.path.join(IMAGES_DIR, "chat_icon.svg")
 MEDIA_ICON = os.path.join(IMAGES_DIR, "media_icon.svg")
+AUX_ICON = os.path.join(IMAGES_DIR, "aux_icon.svg")
 HDMI_ICON = os.path.join(IMAGES_DIR, "hdmi_icon.svg")
 GAMEDAC_ICON = os.path.join(IMAGES_DIR, "gamedac_icon.svg")
 CLIPS_ICON = os.path.join(IMAGES_DIR, "clips_icon.svg")
 
 
 # ── SvgIconWidget ──────────────────────────────────────────────────────────────
+
+def tinted_svg_pixmap(svg_path: str, color: str, width: int, height: int) -> QPixmap:
+    """Render *svg_path* at *width* x *height* with every fill in *color*.
+
+    Transparent on any error, so a missing icon leaves a gap rather than a crash.
+    """
+    pixmap = QPixmap(width, height)
+    pixmap.fill(QColor(0, 0, 0, 0))
+
+    try:
+        with open(svg_path, encoding="utf-8") as f:
+            svg_data = f.read()
+
+        # Replace existing fill / stroke attributes and style properties
+        svg_data = re.sub(r'(fill|stroke)="(?!none)[^"]*"', f'fill="{color}"', svg_data)
+        svg_data = re.sub(r'(fill|stroke):\s*(?!none)[^;}"]+', f'fill:{color}', svg_data)
+
+        renderer = QSvgRenderer(svg_data.encode("utf-8"))
+        if renderer.isValid():
+            painter = QPainter(pixmap)
+            renderer.render(painter)
+            painter.end()
+    except Exception:
+        pass  # Leave transparent pixmap on error
+    return pixmap
+
 
 class SvgIconWidget(QLabel):
     """Renders an SVG file tinted with a given color."""
@@ -57,29 +85,16 @@ class SvgIconWidget(QLabel):
         self.setFixedSize(w, size)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setFrameShadow(QFrame.Shadow.Plain)
+        self._svg_path, self._size, self._width = svg_path, size, w
         self._load(svg_path, color, size, w)
+
+    def set_color(self, color: str) -> None:
+        """Re-tint the icon, e.g. after a theme change."""
+        self._load(self._svg_path, color, self._size, self._width)
 
     def _load(self, svg_path: str, color: str, size: int, width: int | None = None):
         w = width if width is not None else size
-        pixmap = QPixmap(w, size)
-        pixmap.fill(QColor(0, 0, 0, 0))
-
-        try:
-            with open(svg_path, encoding="utf-8") as f:
-                svg_data = f.read()
-
-            # Replace existing fill / stroke attributes and style properties
-            svg_data = re.sub(r'(fill|stroke)="(?!none)[^"]*"', f'fill="{color}"', svg_data)
-            svg_data = re.sub(r'(fill|stroke):\s*(?!none)[^;}"]+', f'fill:{color}', svg_data)
-
-            renderer = QSvgRenderer(svg_data.encode("utf-8"))
-            if renderer.isValid():
-                painter = QPainter(pixmap)
-                renderer.render(painter)
-                painter.end()
-        except Exception:
-            pass  # Leave transparent pixmap on error
-
+        pixmap = tinted_svg_pixmap(svg_path, color, w, size)
         self.setPixmap(pixmap)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setStyleSheet("border: none; background: transparent;")

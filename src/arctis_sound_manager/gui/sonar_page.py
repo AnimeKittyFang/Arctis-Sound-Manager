@@ -21,6 +21,7 @@ from pathlib import Path
 from arctis_sound_manager import service_control as sc
 from arctis_sound_manager.gui.channel_output_selector import ChannelOutputSelector
 from arctis_sound_manager.gui.output_selector import OutputSelector
+from arctis_sound_manager.gui.search_pick_dialog import SearchPickDialog
 from arctis_sound_manager.i18n import I18n
 
 from PySide6.QtCore import QThread, Qt, QTimer, Signal, Slot
@@ -36,8 +37,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMenu,
     QPushButton,
     QSizePolicy,
@@ -915,13 +914,13 @@ class _ApplyAllWorker(QThread):
 
 # ── Preset search dialog ──────────────────────────────────────────────────────
 
-class _PresetSearchDialog(QDialog):
-    def __init__(self, presets: dict[str, Path], parent: QWidget | None = None):
-        super().__init__(parent)
-        self.setWindowTitle(_t("search_preset"))
-        self.setMinimumSize(340, 480)
-        self.selected_name: str | None = None
+class _PresetSearchDialog(SearchPickDialog):
+    def __init__(self, presets: dict[str, Path], parent: QWidget | None = None,
+                 current: str | None = None, allow_delete: bool = True):
+        """*current* starts selected; *allow_delete* off hides the delete menu
+        (the Channels page lists favorites, which it has no business deleting)."""
         self._presets = presets
+        self._allow_delete = allow_delete
         self._custom_names: set[str] = {
             n for n, p in presets.items() if p.parent == _PRESETS_DIR
         }
@@ -932,71 +931,26 @@ class _PresetSearchDialog(QDialog):
         # within each group.
         _own = sorted(self._custom_names)
         _shared = sorted(self._community_names)
-        self._all = _own + _shared + [
+        names = _own + _shared + [
             n for n in presets.keys()
             if n not in self._custom_names and n not in self._community_names
         ]
+        super().__init__(_t("search_preset"), [(n, n) for n in names], parent, current)
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(8)
+    @property
+    def selected_name(self) -> str | None:
+        return self.selected_key
 
-        self._search = QLineEdit()
-        self._search.setPlaceholderText(_t("search_dots"))
-        self._search.setStyleSheet(f"""
-            QLineEdit {{
-                background: {BG_BUTTON};
-                border: 1px solid {BORDER};
-                border-radius: 6px;
-                color: {TEXT_PRIMARY};
-                padding: 6px 10px;
-                font-size: 11pt;
-            }}
-            QLineEdit:focus {{ border-color: {ACCENT}; }}
-        """)
-        self._search.textChanged.connect(self._filter)
-        layout.addWidget(self._search)
-
-        self._list = QListWidget()
-        self._list.setStyleSheet(f"""
-            QListWidget {{
-                background: {BG_CARD};
-                border: 1px solid {BORDER};
-                border-radius: 6px;
-                color: {TEXT_PRIMARY};
-            }}
-            QListWidget::item:selected {{ background: {ACCENT}; color: #fff; }}
-            QListWidget::item:hover    {{ background: {BG_BUTTON_HOVER}; }}
-        """)
-        self._list.itemDoubleClicked.connect(self.accept)
-        self._list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self._list.customContextMenuRequested.connect(self._on_context_menu)
-        layout.addWidget(self._list)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-        self._filter("")
-
-    def _filter(self, text: str):
-        self._list.clear()
-        q = text.lower()
-        for name in self._all:
-            if q in name.lower():
-                item = QListWidgetItem(name)
-                if name in self._custom_names:
-                    item.setForeground(QColor(ACCENT))
-                elif name in self._community_names:
-                    item.setForeground(QColor(COMMUNITY_COLOR))
-                # SteelSeries presets keep the default text colour.
-                self._list.addItem(item)
+    def _color_for(self, key: str) -> str | None:
+        if key in self._custom_names:
+            return _theme.c('ACCENT')
+        if key in self._community_names:
+            return COMMUNITY_COLOR
+        return None  # SteelSeries presets keep the default text colour.
 
     def _on_context_menu(self, pos) -> None:
         item = self._list.itemAt(pos)
-        if not item:
+        if not item or not self._allow_delete:
             return
         name = item.text()
         # Rename and delete apply to files the user chose to have — their own
@@ -1006,8 +960,9 @@ class _PresetSearchDialog(QDialog):
             return
         menu = QMenu(self)
         menu.setStyleSheet(
-            f"QMenu {{ background: {BG_CARD}; border: 1px solid {BORDER}; color: {TEXT_PRIMARY}; }}"
-            f"QMenu::item:selected {{ background: {ACCENT}; color: #fff; }}"
+            f"QMenu {{ background: {_theme.c('BG_CARD')}; border: 1px solid {_theme.c('BORDER')}; "
+            f"color: {_theme.c('TEXT_PRIMARY')}; }}"
+            f"QMenu::item:selected {{ background: {_theme.c('ACCENT')}; color: #fff; }}"
         )
         act_delete = menu.addAction(_t("delete_custom_preset"))
         if menu.exec(self._list.mapToGlobal(pos)) == act_delete:
@@ -1015,15 +970,9 @@ class _PresetSearchDialog(QDialog):
             path.unlink(missing_ok=True)
             self._custom_names.discard(name)
             self._community_names.discard(name)
-            self._all.remove(name)
+            self._entries.remove((name, name))
             del self._presets[name]
             self._filter(self._search.text())
-
-    def accept(self):
-        item = self._list.currentItem()
-        if item:
-            self.selected_name = item.text()
-        super().accept()
 
 
 # ── Favorite slot button ──────────────────────────────────────────────────────
@@ -3244,8 +3193,21 @@ class _StreamGuardBar(QFrame):
                 border-radius: 10px;
             }}
             QFrame#streamGuardBar QCheckBox {{
+                background: transparent;
                 color: {_theme.c('TEXT_PRIMARY')};
                 font-size: 10pt;
+                spacing: 6px;
+            }}
+            QFrame#streamGuardBar QCheckBox::indicator {{
+                width: 16px;
+                height: 16px;
+                border: 1px solid {_theme.c('BORDER')};
+                border-radius: 4px;
+                background-color: {_theme.c('TOGGLE_OFF')};
+            }}
+            QFrame#streamGuardBar QCheckBox::indicator:checked {{
+                background-color: {_theme.c('TOGGLE_ON')};
+                border-color: {_theme.c('TOGGLE_ON')};
             }}
             QFrame#streamGuardBar QCheckBox:disabled {{
                 color: {_theme.c('TEXT_SECONDARY')};

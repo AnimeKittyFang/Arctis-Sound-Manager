@@ -145,6 +145,25 @@ def _styled_button(text: str) -> QPushButton:
     return btn
 
 
+# The "general" D-Bus section, split by topic. Keys not listed in any of these
+# stay in the General group itself.
+_INTERFACE_KEYS = ('systray_show_battery', 'systray_icon_color')
+_AUDIO_KEYS = (
+    'redirect_audio_on_connect', 'redirect_audio_on_connect_channel',
+    'redirect_audio_on_disconnect', 'redirect_audio_on_disconnect_device',
+    'external_output_device', 'hrir_id', 'pipewire_quantum',
+)
+_MICRO_KEYS = ('micro_input_source', 'micro_alt_source', 'micro_autoswitch')
+_GENERIC_KEYS = ('generic_device_mode', 'generic_output_device', 'generic_input_device')
+
+
+def _settings_panel_qss() -> str:
+    return f"""
+        QWidget {{ background-color: {_theme.c('BG_MAIN')}; color: {_theme.c('TEXT_PRIMARY')}; }}
+        QLabel {{ background-color: transparent; color: {_theme.c('TEXT_PRIMARY')}; font-size: 11pt; }}
+    """
+
+
 class DevicePage(QWidget):
     """
     Settings page with:
@@ -185,6 +204,11 @@ class DevicePage(QWidget):
         content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         content_layout.setContentsMargins(36, 12, 36, 12)
         content_layout.setSpacing(0)
+        self._settings_groups: list[QSettingsWidget] = []
+
+        # ── General section ────────────────────────────────────────────────────
+        content_layout.addWidget(SectionTitle(I18n.translate("ui", "general_settings")))
+        content_layout.addSpacing(4)
 
         # ── Top row : check for updates (left) + language selector (right) ──────
         title_row = QHBoxLayout()
@@ -250,8 +274,82 @@ class DevicePage(QWidget):
         content_layout.addLayout(title_row)
         content_layout.addSpacing(8)
 
-        # ── Theme selector ────────────────────────────────────────────────────
-        theme_title = SectionTitle(I18n.translate("ui", "interface_theme"))
+        # ── Startup toggle ─────────────────────────────────────────────────────
+        # Mirror QSettingsWidget.get_widget() row structure exactly so this
+        # manual toggle lines up with the general/device-settings toggles above.
+        # The row layout must be *set on a QWidget* (not added to content_layout
+        # via addLayout): a sub-layout added with addLayout inherits the parent
+        # layout's spacing (0 here), whereas a layout set on a widget resolves to
+        # the style's default label→control spacing (6px) — the same value
+        # get_widget() gets. Without this the toggle sat 6px to the left.
+        startup_roww = QWidget()
+        startup_row = QHBoxLayout()
+        startup_row.setContentsMargins(0, 4, 0, 4)
+        startup_roww.setLayout(startup_row)
+        startup_label = QLabel(I18n.translate("ui", "launch_at_startup"))
+        startup_label.setFixedWidth(260)
+        startup_label.setWordWrap(True)
+        startup_label.setStyleSheet(
+            f"color: {TEXT_PRIMARY}; font-size: 11pt; background: transparent;"
+        )
+        startup_row.addWidget(startup_label)
+
+        self._startup_toggle = QDualState(
+            off_text=I18n.translate("settings_values", "off"),
+            on_text=I18n.translate("settings_values", "on"),
+            init_state="right" if autostart_enabled() else "left",
+            accent=True,
+        )
+        self._startup_toggle.setToolTip(f"Autostart via: {active_backend_name()}")
+        self._startup_toggle.checkStateChanged.connect(self._on_autostart_toggled)
+        startup_row.addWidget(self._startup_toggle)
+        startup_row.addStretch(1)
+        content_layout.addWidget(startup_roww)
+
+        content_layout.addSpacing(16)
+
+        # ── Telemetry toggle ───────────────────────────────────────────────────
+        from arctis_sound_manager.telemetry import get_consent, set_consent
+
+        telemetry_roww = QWidget()
+        telemetry_row = QHBoxLayout()
+        telemetry_row.setContentsMargins(0, 4, 0, 4)
+        telemetry_roww.setLayout(telemetry_row)
+        telemetry_label = QLabel("Telemetry — share anonymous usage data")
+        telemetry_label.setFixedWidth(260)
+        telemetry_label.setWordWrap(True)
+        telemetry_label.setStyleSheet(
+            f"color: {TEXT_PRIMARY}; font-size: 11pt; background: transparent;"
+        )
+        telemetry_row.addWidget(telemetry_label)
+
+        consent = get_consent()
+        self._telemetry_toggle = QDualState(
+            off_text=I18n.translate("settings_values", "off"),
+            on_text=I18n.translate("settings_values", "on"),
+            init_state="right" if consent is True else "left",
+            accent=True,
+        )
+        self._telemetry_toggle.checkStateChanged.connect(
+            lambda state: set_consent(state == Qt.CheckState.Checked)
+        )
+        telemetry_row.addWidget(self._telemetry_toggle)
+        telemetry_row.addStretch(1)
+        content_layout.addWidget(telemetry_roww)
+
+        content_layout.addSpacing(16)
+
+        # Whatever no other group claims lands here, so a setting added to
+        # GeneralSettings shows up even before it is given a group.
+        self._general_widget = self._add_settings_group(
+            content_layout, None, None,
+            exclude=_INTERFACE_KEYS + _AUDIO_KEYS + _MICRO_KEYS + _GENERIC_KEYS)
+        content_layout.addSpacing(12)
+        content_layout.addWidget(DividerLine())
+        content_layout.addSpacing(12)
+
+        # ── Interface & tray: theme, then the tray settings ────────────────────────────────────────────────────
+        theme_title = SectionTitle(I18n.translate("ui", "settings_group_interface"))
         content_layout.addWidget(theme_title)
         content_layout.addSpacing(6)
 
@@ -287,6 +385,8 @@ class DevicePage(QWidget):
         self._theme_export_btn.clicked.connect(self._on_theme_export)
         self._theme_import_btn.clicked.connect(self._on_theme_import)
 
+        content_layout.addSpacing(6)
+        self._add_settings_group(content_layout, None, _INTERFACE_KEYS)
         content_layout.addSpacing(12)
         content_layout.addWidget(DividerLine())
         content_layout.addSpacing(12)
@@ -322,7 +422,7 @@ class DevicePage(QWidget):
         content_layout.addWidget(device_settings_title)
         content_layout.addSpacing(4)
 
-        self._device_widget = QSettingsWidget(content, "device", "device")
+        self._device_widget = QSettingsWidget(content, None, "device")
         self._device_widget.setStyleSheet(
             f"""
             QWidget {{
@@ -343,89 +443,16 @@ class DevicePage(QWidget):
         content_layout.addWidget(DividerLine())
         content_layout.addSpacing(6)
 
-        # ── General Settings section ───────────────────────────────────────────
-        general_title = SectionTitle(I18n.translate("ui", "general_settings"))
-        content_layout.addWidget(general_title)
-        content_layout.addSpacing(4)
-
-        self._general_widget = QSettingsWidget(content, "general", "general")
-        self._general_widget.setStyleSheet(
-            f"""
-            QWidget {{
-                background-color: {BG_MAIN};
-                color: {TEXT_PRIMARY};
-            }}
-            QLabel {{
-                background-color: transparent;
-                color: {TEXT_PRIMARY};
-                font-size: 11pt;
-            }}
-            """
-        )
-        content_layout.addWidget(self._general_widget)
-
-        # ── Startup toggle ─────────────────────────────────────────────────────
-        # Mirror QSettingsWidget.get_widget() row structure exactly so this
-        # manual toggle lines up with the general/device-settings toggles above.
-        # The row layout must be *set on a QWidget* (not added to content_layout
-        # via addLayout): a sub-layout added with addLayout inherits the parent
-        # layout's spacing (0 here), whereas a layout set on a widget resolves to
-        # the style's default label→control spacing (6px) — the same value
-        # get_widget() gets. Without this the toggle sat 6px to the left.
-        startup_roww = QWidget()
-        startup_row = QHBoxLayout()
-        startup_row.setContentsMargins(0, 4, 0, 4)
-        startup_roww.setLayout(startup_row)
-        startup_label = QLabel(I18n.translate("ui", "launch_at_startup"))
-        startup_label.setFixedWidth(260)
-        startup_label.setWordWrap(True)
-        startup_label.setStyleSheet(
-            f"color: {TEXT_PRIMARY}; font-size: 11pt; background: transparent;"
-        )
-        startup_row.addWidget(startup_label)
-
-        self._startup_toggle = QDualState(
-            off_text=I18n.translate("settings_values", "off"),
-            on_text=I18n.translate("settings_values", "on"),
-            init_state="right" if autostart_enabled() else "left",
-        )
-        self._startup_toggle.setToolTip(f"Autostart via: {active_backend_name()}")
-        self._startup_toggle.checkStateChanged.connect(self._on_autostart_toggled)
-        startup_row.addWidget(self._startup_toggle)
-        startup_row.addStretch(1)
-        content_layout.addWidget(startup_roww)
-
-        content_layout.addSpacing(16)
-
-        # ── Telemetry toggle ───────────────────────────────────────────────────
-        from arctis_sound_manager.telemetry import get_consent, set_consent
-
-        telemetry_roww = QWidget()
-        telemetry_row = QHBoxLayout()
-        telemetry_row.setContentsMargins(0, 4, 0, 4)
-        telemetry_roww.setLayout(telemetry_row)
-        telemetry_label = QLabel("Telemetry — share anonymous usage data")
-        telemetry_label.setFixedWidth(260)
-        telemetry_label.setWordWrap(True)
-        telemetry_label.setStyleSheet(
-            f"color: {TEXT_PRIMARY}; font-size: 11pt; background: transparent;"
-        )
-        telemetry_row.addWidget(telemetry_label)
-
-        consent = get_consent()
-        self._telemetry_toggle = QDualState(
-            off_text=I18n.translate("settings_values", "off"),
-            on_text=I18n.translate("settings_values", "on"),
-            init_state="right" if consent is True else "left",
-        )
-        self._telemetry_toggle.checkStateChanged.connect(
-            lambda state: set_consent(state == Qt.CheckState.Checked)
-        )
-        telemetry_row.addWidget(self._telemetry_toggle)
-        telemetry_row.addStretch(1)
-        content_layout.addWidget(telemetry_roww)
-
-        content_layout.addSpacing(16)
+        self._add_settings_group(content_layout, "settings_group_audio", _AUDIO_KEYS)
+        content_layout.addSpacing(6)
+        content_layout.addWidget(DividerLine())
+        content_layout.addSpacing(6)
+        self._add_settings_group(content_layout, "settings_group_micro", _MICRO_KEYS)
+        content_layout.addSpacing(6)
+        content_layout.addWidget(DividerLine())
+        content_layout.addSpacing(6)
+        self._add_settings_group(content_layout, "settings_group_generic", _GENERIC_KEYS)
+        content_layout.addSpacing(6)
 
         content_layout.addStretch(1)
 
@@ -440,6 +467,18 @@ class DevicePage(QWidget):
         # Apply the currently-active theme on first paint.
         self.apply_theme()
 
+    def _add_settings_group(self, layout: QVBoxLayout, title_key: str | None,
+                            keys, exclude=()) -> QSettingsWidget:
+        """One panel of "general" settings, under its own title if given."""
+        if title_key:
+            layout.addWidget(SectionTitle(I18n.translate("ui", title_key)))
+            layout.addSpacing(4)
+        widget = QSettingsWidget(self._content, None, "general", keys=keys, exclude=exclude)
+        widget.setStyleSheet(_settings_panel_qss())
+        layout.addWidget(widget)
+        self._settings_groups.append(widget)
+        return widget
+
     # ── Theme propagation ─────────────────────────────────────────────────────
 
     def apply_theme(self, t=None) -> None:
@@ -448,19 +487,11 @@ class DevicePage(QWidget):
         self._scroll.setStyleSheet(f"QScrollArea {{ background-color: {_theme.c('BG_MAIN')}; border: none; }}")
         self._content.setStyleSheet(f"background-color: {_theme.c('BG_MAIN')};")
 
-        # Device settings widget
-        if hasattr(self, "_device_widget"):
-            self._device_widget.setStyleSheet(f"""
-                QWidget {{ background-color: {_theme.c('BG_MAIN')}; color: {_theme.c('TEXT_PRIMARY')}; }}
-                QLabel {{ background-color: transparent; color: {_theme.c('TEXT_PRIMARY')}; font-size: 11pt; }}
-            """)
-
-        # General settings widget
-        if hasattr(self, "_general_widget"):
-            self._general_widget.setStyleSheet(f"""
-                QWidget {{ background-color: {_theme.c('BG_MAIN')}; color: {_theme.c('TEXT_PRIMARY')}; }}
-                QLabel {{ background-color: transparent; color: {_theme.c('TEXT_PRIMARY')}; font-size: 11pt; }}
-            """)
+        # Settings panels
+        for widget in [getattr(self, "_device_widget", None), *getattr(self, "_settings_groups", [])]:
+            if widget is not None:
+                widget.setStyleSheet(_settings_panel_qss())
+                widget.apply_theme()
 
         # ANC widget background + pill colors
         if hasattr(self, "_anc_widget"):
@@ -599,12 +630,14 @@ class DevicePage(QWidget):
             for category in status.values():
                 if isinstance(category, dict):
                     keys.update(category.keys())
-        self._general_widget.set_available_status_keys(keys)
+        for widget in self._settings_groups:
+            widget.set_available_status_keys(keys)
         self._device_widget.set_available_status_keys(keys)
 
     @Slot(object)
     def update_settings(self, settings: dict):
-        self._general_widget.update_settings(settings)
+        for widget in self._settings_groups:
+            widget.update_settings(settings)
         self._device_widget.update_settings(settings)
         self._update_anc_visibility(settings)
 

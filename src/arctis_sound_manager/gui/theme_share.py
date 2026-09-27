@@ -16,7 +16,7 @@ import re
 from urllib.parse import parse_qs, urlparse
 
 from arctis_sound_manager.gui.theme import (THEME_KEYS, THEME_KEYS_OPTIONAL,
-                                            THEMES)
+                                            default_for)
 
 _ASM_SCHEME = "arctis-asm"
 THEME_SHARE_VERSION = 1
@@ -61,7 +61,7 @@ def _validate_colors(colors: dict) -> dict[str, str]:
     for key in THEME_KEYS:
         if key not in colors:
             if key in THEME_KEYS_OPTIONAL:
-                result[key] = THEMES["steelseries"][key]
+                result[key] = default_for(key, result)
                 continue
             raise ThemeImportError(f"colors missing key: {key}")
         val = colors[key]

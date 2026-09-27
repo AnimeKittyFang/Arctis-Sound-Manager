@@ -31,55 +31,136 @@ def card():
 
 
 def _items(card) -> list[str]:
-    return [card._preset_combo.itemText(i) for i in range(card._preset_combo.count())]
+    return list(card._preset_sig[0])
+
+
+class _FakeDialog:
+    """Stands in for the Equalizer page's preset search window."""
+    DialogCode = SimpleNamespace(Accepted=1)
+    answer: str | None = None
+    opened: list[dict] = []
+
+    def __init__(self, presets, parent=None, current=None, allow_delete=True):
+        _FakeDialog.opened.append(
+            {"names": list(presets), "current": current, "allow_delete": allow_delete})
+        self.selected_name = _FakeDialog.answer
+
+    def exec(self):
+        return 1
+
+    def result(self):
+        return 1 if self.selected_name else 0
+
+
+@pytest.fixture
+def fake_dialog(monkeypatch):
+    from arctis_sound_manager.gui import sonar_page
+    _FakeDialog.opened = []
+    monkeypatch.setattr(sonar_page, "_PresetSearchDialog", _FakeDialog)
+    monkeypatch.setattr(sonar_page, "_list_presets", lambda ch: {})
+    return _FakeDialog
 
 
 def test_picker_hidden_until_presets_given(card):
-    assert card._preset_combo.isHidden()
+    assert card._preset_btn.isHidden()
 
 
-def test_picker_lists_favorites_with_active_selected(card):
+def test_picker_lists_favorites_with_active_selected(card, fake_dialog):
     card.set_presets(["Flat", "FPS", "Racing"], "FPS")
-    assert not card._preset_combo.isHidden()
+    assert not card._preset_btn.isHidden()
     assert _items(card) == ["Flat", "FPS", "Racing"]
-    assert card._preset_combo.currentText() == "FPS"
+    card._on_preset_clicked()
+    assert fake_dialog.opened == [
+        {"names": ["Flat", "FPS", "Racing"], "current": "FPS", "allow_delete": False}]
 
 
 def test_active_preset_listed_even_when_not_a_favorite(card):
     """The picker must show what is really applied, not a favorite that isn't."""
     card.set_presets(["FPS", "Racing"], "Podcast")
     assert _items(card) == ["Podcast", "FPS", "Racing"]
-    assert card._preset_combo.currentText() == "Podcast"
 
 
-def test_no_favorites_shows_disabled_placeholder(card):
+def test_no_favorites_disables_the_button(card):
     card.set_presets([], "")
-    assert card._preset_combo.count() == 1
-    assert not card._preset_combo.isEnabled()
+    assert not card._preset_btn.isHidden()
+    assert not card._preset_btn.isEnabled()
 
 
 def test_none_hides_the_picker(card):
     card.set_presets(["FPS"], "FPS")
     card.set_presets(None)
-    assert card._preset_combo.isHidden()
+    assert card._preset_btn.isHidden()
 
 
-def test_picking_calls_back_once_and_not_for_the_active_one(card):
+def test_picking_calls_back_once_and_not_for_the_active_one(card, fake_dialog):
     picked = []
-    card.set_on_preset(picked.append)
+    card.set_on_preset(picked.append, "game")
     card.set_presets(["Flat", "FPS"], "Flat")
-    card._on_preset_activated(0)          # already active: nothing to apply
-    card._on_preset_activated(1)
+    fake_dialog.answer = "Flat"           # already active: nothing to apply
+    card._on_preset_clicked()
+    fake_dialog.answer = None             # cancelled
+    card._on_preset_clicked()
+    fake_dialog.answer = "FPS"
+    card._on_preset_clicked()
     assert picked == ["FPS"]
 
 
-def test_same_listing_does_not_rebuild(card):
-    """A poll redrawing the same list would close a popup the user has open."""
+def test_busy_locks_the_button(card):
     card.set_presets(["Flat", "FPS"], "Flat")
-    cleared = []
-    card._preset_combo.clear = lambda: cleared.append(True)
-    card.set_presets(["Flat", "FPS"], "Flat")
-    assert cleared == []
+    card.set_preset_busy(True)
+    assert not card._preset_btn.isEnabled()
+    card.set_preset_busy(False)
+    assert card._preset_btn.isEnabled()
+
+
+class _FakePicker:
+    def __init__(self):
+        self.picked: list[str] = []
+
+    def options(self):
+        return [("", "Arctis Nova Pro"), ("bt", "Earbuds")]
+
+    def current_id(self):
+        return ""
+
+    def pick(self, device_id):
+        self.picked.append(device_id)
+
+
+def test_output_button_hidden_until_picker_given(card):
+    assert card._output_btn.isHidden()
+    card.set_output_picker(_FakePicker())
+    assert not card._output_btn.isHidden()
+
+
+def test_output_button_picks_through_the_selector(card, monkeypatch):
+    opened = []
+
+    class _Dlg:
+        DialogCode = SimpleNamespace(Accepted=1)
+        answer = None
+
+        def __init__(self, title, entries, parent=None, current=None):
+            opened.append((entries, current))
+            self.selected_key = _Dlg.answer
+
+        def exec(self):
+            return 1
+
+        def result(self):
+            return 1 if self.selected_key is not None else 0
+
+    monkeypatch.setattr(home_page, "SearchPickDialog", _Dlg)
+    picker = _FakePicker()
+    card.set_output_picker(picker)
+    _Dlg.answer = ""                      # the current one: nothing to do
+    card._on_output_clicked()
+    _Dlg.answer = None                    # cancelled
+    card._on_output_clicked()
+    _Dlg.answer = "bt"
+    card._on_output_clicked()
+    assert picker.picked == ["bt"]
+    assert opened[0] == ([("", "Arctis Nova Pro"), ("bt", "Earbuds")], "")
 
 
 # ── HomePage wiring ────────────────────────────────────────────────────────────
