@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
+from arctis_sound_manager.runtime_staleness import RUNNING_VERSION
+
 CRASH_REPORT_FILE = Path.home() / '.config' / 'arctis_manager' / 'crash_report.json'
 GITHUB_ISSUES_URL = 'https://github.com/loteran/Arctis-Sound-Manager/issues/new'
 
@@ -1730,6 +1732,12 @@ def write_crash_report(exc_type, exc_value, exc_tb, source: str = 'gui') -> None
             'timestamp': datetime.now().isoformat(),
             'source': source,
             'traceback': tb_str,
+            # The version this process is running, not the one on disk: a
+            # package upgrade replaces the files under a live tray, and a crash
+            # that old code has on its way out used to be reported as the new
+            # version's (#284, #285 were #277, already fixed in the release
+            # they were filed against).
+            'version': RUNNING_VERSION,
         }
         CRASH_REPORT_FILE.parent.mkdir(parents=True, exist_ok=True)
         CRASH_REPORT_FILE.write_text(json.dumps(report, indent=2))
@@ -1738,9 +1746,20 @@ def write_crash_report(exc_type, exc_value, exc_tb, source: str = 'gui') -> None
 
 
 def read_crash_report() -> Optional[dict]:
+    """The crash left by a previous session, or None.
+
+    A crash recorded by an older version than the one now running is dropped
+    rather than offered for reporting: it happened in code that has since been
+    replaced, typically the previous release's tray dying during the upgrade.
+    """
     try:
         if CRASH_REPORT_FILE.exists():
-            return json.loads(CRASH_REPORT_FILE.read_text())
+            report = json.loads(CRASH_REPORT_FILE.read_text())
+            crashed_on = report.get('version', '')
+            if crashed_on and crashed_on != RUNNING_VERSION and RUNNING_VERSION not in ('', 'dev'):
+                clear_crash_report()
+                return None
+            return report
     except Exception:
         pass
     return None
