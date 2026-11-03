@@ -1,6 +1,6 @@
 {
-  "version": "122.0.0",
-  "checked_at": "2026-10-21T14:32:31.628764+00:00",
+  "version": "123.0.0",
+  "checked_at": "2026-11-03T17:09:28.238695+00:00",
   "edevice_files": [
     "ae2-150.edevice",
     "aeon_pro_controller.edevice",
@@ -622,9 +622,9 @@
     "standard-boilerplate.device": "b77dcaf72a1d3e9898a6811ca846c9b750a0515aeaf826d819208fca9993cf0b"
   },
   "presets_added": [
-    "Ace Combat 8_ Wings of theve [Game].json",
-    "Control Resonant [Game].json",
-    "Silent Hill_ Townfall [Game].json"
+    "COD_ Modern Warfare 4 [Game].json",
+    "Castlevania_ Belmont's Curse [Game].json",
+    "How to fish [Game].json"
   ],
   "new_files": [],
   "changed_specs": [],
