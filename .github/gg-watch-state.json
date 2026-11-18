@@ -1,6 +1,6 @@
 {
-  "version": "123.0.0",
-  "checked_at": "2026-11-03T17:09:28.238695+00:00",
+  "version": "124.0.0",
+  "checked_at": "2026-11-18T18:11:49.189682+00:00",
   "edevice_files": [
     "ae2-150.edevice",
     "aeon_pro_controller.edevice",
@@ -619,14 +619,12 @@
     "base_arctis_nova_pro_wireless_rx_bootloader.device": "3d26dc716a7f95bbe1b9caa78b808fabd29c4a63cdbe7e4e1bed8cc7c9e018a7",
     "generic-screened-device.device": "f18dc40f4604333d682c520ffa3b7a078cc54e8fe3fa8e6276fe2f27997ac40d",
     "standard-app-boilerplate.device": "26725cb825f926cdda9ef0bb1ac4f7ec4528f8612f447895ae26101f676cabab",
-    "standard-boilerplate.device": "b77dcaf72a1d3e9898a6811ca846c9b750a0515aeaf826d819208fca9993cf0b"
+    "standard-boilerplate.device": "27325dd70c0c16f76fcc5fb77c35e5e2ce138abe164ff28e146c36301b6bbe79"
   },
-  "presets_added": [
-    "COD_ Modern Warfare 4 [Game].json",
-    "Castlevania_ Belmont's Curse [Game].json",
-    "How to fish [Game].json"
-  ],
+  "presets_added": [],
   "new_files": [],
-  "changed_specs": [],
+  "changed_specs": [
+    "standard-boilerplate.device"
+  ],
   "issue": null
 }
